@@ -1,6 +1,6 @@
 from enum import StrEnum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class FieldStatus(StrEnum):
@@ -47,3 +47,16 @@ class FieldResult(BaseModel):
 class VerificationResult(BaseModel):
     verdict: VerificationVerdict
     fields: list[FieldResult]
+
+
+class VerificationResponse(VerificationResult):
+    latency_ms: int
+
+
+class ErrorBody(BaseModel):
+    message: str
+    details: list[str] = Field(default_factory=list)
+
+
+class ErrorResponse(BaseModel):
+    error: ErrorBody
