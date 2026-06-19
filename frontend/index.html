@@ -8,19 +8,70 @@
   </head>
   <body>
     <main class="page">
-      <section class="status-panel" aria-labelledby="app-title">
-        <p class="eyebrow">Proof of Concept</p>
-        <h1 id="app-title">TTB Label Verification</h1>
-        <p class="intro">The Phase 0 app is online and ready for the next build step.</p>
-        <div class="health-card" role="status" aria-live="polite">
-          <span id="health-indicator" class="indicator pending"></span>
-          <div>
-            <p class="health-label">Backend health</p>
-            <pre id="health-result">Checking connection...</pre>
+      <header class="page-header">
+        <p class="eyebrow">Single Label Check</p>
+        <h1>TTB Label Verification</h1>
+        <p class="status-line" id="status-line">Ready to check one label.</p>
+      </header>
+
+      <section class="workspace" aria-label="Label verification form">
+        <form id="verify-form" class="verify-form" novalidate>
+          <div class="image-picker">
+            <label for="image">Label Image</label>
+            <input id="image" name="image" type="file" accept="image/jpeg,image/png,image/webp" required>
+            <p id="selected-file" class="selected-file">No image selected</p>
+            <img id="image-preview" class="image-preview" alt="Selected label preview" hidden>
           </div>
-        </div>
+
+          <div class="fields-grid">
+            <div class="field">
+              <label for="brand_name">Brand Name</label>
+              <input id="brand_name" name="brand_name" type="text" autocomplete="off" required>
+            </div>
+
+            <div class="field">
+              <label for="class_type">Class / Type</label>
+              <input id="class_type" name="class_type" type="text" autocomplete="off" required>
+            </div>
+
+            <div class="field">
+              <label for="producer_name">Producer Name</label>
+              <input id="producer_name" name="producer_name" type="text" autocomplete="off" required>
+            </div>
+
+            <div class="field">
+              <label for="country_of_origin">Country of Origin</label>
+              <input id="country_of_origin" name="country_of_origin" type="text" autocomplete="off" required>
+            </div>
+
+            <div class="field">
+              <label for="alcohol_by_volume">Alcohol by Volume</label>
+              <input id="alcohol_by_volume" name="alcohol_by_volume" type="text" autocomplete="off" required>
+            </div>
+
+            <div class="field">
+              <label for="net_contents">Net Contents</label>
+              <input id="net_contents" name="net_contents" type="text" autocomplete="off" required>
+            </div>
+
+            <div class="field field-wide">
+              <label for="government_warning">Government Warning</label>
+              <textarea id="government_warning" name="government_warning" rows="7" required></textarea>
+            </div>
+          </div>
+
+          <div id="error-box" class="error-box" role="alert" hidden></div>
+
+          <button id="submit-button" class="primary-button" type="submit">Verify Label</button>
+          <p id="loading-message" class="loading-message" role="status" aria-live="polite" hidden>
+            Checking the label. This usually takes a few seconds.
+          </p>
+        </form>
+
+        <section id="results" class="results" aria-live="polite" hidden></section>
       </section>
     </main>
+
     <script src="/static/app.js"></script>
   </body>
 </html>
