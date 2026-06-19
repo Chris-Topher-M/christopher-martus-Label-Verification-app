@@ -9,13 +9,22 @@
   <body>
     <main class="page">
       <header class="page-header">
-        <p class="eyebrow">Single Label Check</p>
+        <p class="eyebrow" id="mode-eyebrow">Single Label Check</p>
         <h1>TTB Label Verification</h1>
         <p class="status-line" id="status-line">Ready to check one label.</p>
       </header>
 
+      <nav class="mode-switch" aria-label="Verification mode">
+        <button id="single-mode-button" class="mode-button active" type="button" aria-pressed="true">
+          Single Label
+        </button>
+        <button id="batch-mode-button" class="mode-button" type="button" aria-pressed="false">
+          Batch Upload
+        </button>
+      </nav>
+
       <section class="workspace" aria-label="Label verification form">
-        <form id="verify-form" class="verify-form" novalidate>
+        <form id="verify-form" class="verify-form mode-panel" novalidate>
           <div class="image-picker">
             <label for="image">Label Image</label>
             <input id="image" name="image" type="file" accept="image/jpeg,image/png,image/webp" required>
@@ -69,6 +78,36 @@
         </form>
 
         <section id="results" class="results" aria-live="polite" hidden></section>
+
+        <form id="batch-form" class="verify-form mode-panel" novalidate hidden>
+          <div class="image-picker">
+            <label for="batch-images">Label Images</label>
+            <input
+              id="batch-images"
+              name="images"
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              multiple
+              required
+            >
+            <p id="batch-selected-files" class="selected-file">No images selected</p>
+          </div>
+
+          <div id="batch-list" class="batch-list"></div>
+
+          <div id="batch-error-box" class="error-box" role="alert" hidden></div>
+
+          <button id="batch-submit-button" class="primary-button" type="submit">Verify Batch</button>
+          <p id="batch-loading-message" class="loading-message" role="status" aria-live="polite" hidden>
+            Checking labels...
+          </p>
+          <div id="batch-progress-panel" class="progress-panel" role="status" aria-live="polite" hidden>
+            <div class="spinner" aria-hidden="true"></div>
+            <p>Checking labels. This can take a few seconds.</p>
+          </div>
+        </form>
+
+        <section id="batch-results" class="results" aria-live="polite" hidden></section>
       </section>
     </main>
 

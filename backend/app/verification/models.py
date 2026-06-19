@@ -53,6 +53,27 @@ class VerificationResponse(VerificationResult):
     latency_ms: int
 
 
+class BatchVerificationSummary(BaseModel):
+    passed: int
+    needs_review: int
+    total: int
+    latency_ms: int
+
+
+class BatchVerificationItem(BaseModel):
+    client_id: str | None = None
+    filename: str
+    verdict: VerificationVerdict
+    fields: list[FieldResult] = Field(default_factory=list)
+    latency_ms: int
+    error: str | None = None
+
+
+class BatchVerificationResponse(BaseModel):
+    summary: BatchVerificationSummary
+    items: list[BatchVerificationItem]
+
+
 class ErrorBody(BaseModel):
     message: str
     details: list[str] = Field(default_factory=list)
