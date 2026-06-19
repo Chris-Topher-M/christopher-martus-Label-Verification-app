@@ -5,6 +5,8 @@ description = "Minimal deployable skeleton for the TTB Label Verification proof-
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115.0",
+    "openai>=2.43.0",
+    "pillow>=12.2.0",
     "uvicorn>=0.30.0",
 ]
 
