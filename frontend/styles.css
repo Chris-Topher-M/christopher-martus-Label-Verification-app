@@ -1,0 +1,108 @@
+:root {
+  color-scheme: light;
+  font-family: Arial, Helvetica, sans-serif;
+  background: #f6f7f9;
+  color: #172033;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+.page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.status-panel {
+  width: min(100%, 760px);
+  background: #ffffff;
+  border: 1px solid #d8dee8;
+  border-radius: 8px;
+  padding: 36px;
+  box-shadow: 0 16px 42px rgba(23, 32, 51, 0.08);
+}
+
+.eyebrow {
+  margin: 0 0 10px;
+  color: #51607a;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+h1 {
+  margin: 0;
+  font-size: 48px;
+  line-height: 1.08;
+  letter-spacing: 0;
+}
+
+.intro {
+  margin: 18px 0 28px;
+  color: #39455c;
+  font-size: 24px;
+  line-height: 1.35;
+}
+
+.health-card {
+  display: grid;
+  grid-template-columns: 22px 1fr;
+  gap: 16px;
+  align-items: start;
+  padding: 20px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #f9fafb;
+}
+
+.indicator {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  margin-top: 5px;
+  background: #9aa4b2;
+}
+
+.indicator.healthy {
+  background: #1f8f4d;
+}
+
+.indicator.unhealthy {
+  background: #b42318;
+}
+
+.health-label {
+  margin: 0 0 8px;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: #172033;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 18px;
+  line-height: 1.45;
+}
+
+@media (max-width: 560px) {
+  .status-panel {
+    padding: 24px;
+  }
+
+  h1 {
+    font-size: 36px;
+  }
+
+  .intro {
+    font-size: 20px;
+  }
+}

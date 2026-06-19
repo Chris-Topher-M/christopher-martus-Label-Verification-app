@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TTB Label Verification</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <main class="page">
+      <section class="status-panel" aria-labelledby="app-title">
+        <p class="eyebrow">Proof of Concept</p>
+        <h1 id="app-title">TTB Label Verification</h1>
+        <p class="intro">The Phase 0 app is online and ready for the next build step.</p>
+        <div class="health-card" role="status" aria-live="polite">
+          <span id="health-indicator" class="indicator pending"></span>
+          <div>
+            <p class="health-label">Backend health</p>
+            <pre id="health-result">Checking connection...</pre>
+          </div>
+        </div>
+      </section>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

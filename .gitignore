@@ -1,1 +1,30 @@
+# Environment files: never commit secrets or local env templates.
 .env
+.env.*
+.env.example
+
+# Python
+.python-version
+!.python-version
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Build and packaging
+build/
+dist/
+*.egg-info/
+
+# Logs
+*.log
+
+# OS and editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
