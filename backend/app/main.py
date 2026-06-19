@@ -48,6 +48,18 @@ APPLICATION_FIELD_NAMES = (
     "net_contents",
     "government_warning",
 )
+FIELD_LABELS = {
+    "image": "Label Image",
+    "images": "Label Images",
+    "items": "Batch Item Data",
+    "brand_name": "Brand Name",
+    "class_type": "Class / Type",
+    "producer_name": "Producer Name",
+    "country_of_origin": "Country of Origin",
+    "alcohol_by_volume": "Alcohol by Volume",
+    "net_contents": "Net Contents",
+    "government_warning": "Government Warning",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -123,8 +135,22 @@ async def validation_exception_handler(
 def _validation_error_message(error: dict[str, Any]) -> str:
     location = [str(part) for part in error.get("loc", []) if part not in {"body", "form"}]
     field = ".".join(location) if location else "request"
-    message = str(error.get("msg", "Invalid value."))
-    return f"{field}: {message}"
+    message = _readable_validation_message(str(error.get("msg", "Invalid value.")))
+    return f"{_field_label(field)}: {message}"
+
+
+def _readable_validation_message(message: str) -> str:
+    replacements = {
+        "Field required": "Field is required.",
+        "Input should be a valid string": "Please enter text.",
+    }
+    cleaned = message.rstrip(".")
+    return replacements.get(cleaned, f"{cleaned}.")
+
+
+def _field_label(field: str) -> str:
+    last_part = field.rsplit(".", maxsplit=1)[-1]
+    return FIELD_LABELS.get(last_part, FIELD_LABELS.get(field, field))
 
 
 @app.get("/health")
@@ -320,7 +346,8 @@ def _batch_application_data(raw_item: Any, index: int) -> tuple[str, Application
     ]
     if blank_fields:
         fields = ", ".join(blank_fields)
-        return client_id, None, f"Please complete all required application fields: {fields}."
+        labels = ", ".join(_field_label(field) for field in blank_fields)
+        return client_id, None, f"Please complete all required application fields: {labels}."
 
     values = {
         field: raw_item[field].strip() if isinstance(raw_item[field], str) else raw_item[field]
@@ -420,7 +447,7 @@ def _build_application_data(fields: dict[str, str]) -> ApplicationData:
         _raise_readable_error(
             422,
             "Please complete all required verification fields.",
-            [f"{field}: Field is required." for field in blank_fields],
+            [f"{_field_label(field)}: Field is required." for field in blank_fields],
         )
 
     return ApplicationData(**{name: value.strip() for name, value in fields.items()})

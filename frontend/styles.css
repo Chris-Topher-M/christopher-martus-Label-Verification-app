@@ -175,7 +175,9 @@ textarea {
 
 input:focus,
 textarea:focus,
-button:focus {
+button:focus,
+summary:focus,
+[tabindex="-1"]:focus {
   outline: 4px solid #f7c948;
   outline-offset: 3px;
 }

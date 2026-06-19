@@ -158,6 +158,66 @@ def test_batch_image_and_item_count_mismatch_returns_422() -> None:
     assert response.json()["error"]["message"] == "Each label image must have matching application data."
 
 
+def test_batch_malformed_items_json_returns_readable_422() -> None:
+    app.dependency_overrides[get_vision_service] = lambda: lambda: _MappingVisionService({})
+    client = TestClient(app)
+
+    response = client.post(
+        "/verify/batch",
+        data={"items": "{bad json"},
+        files=[("images", ("front-1.png", _image_bytes((120, 30, 60)), "image/png"))],
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["message"] == "Batch item data must be valid JSON."
+
+
+def test_batch_blank_required_field_becomes_item_error_without_calling_vision() -> None:
+    image = _image_bytes((120, 30, 60))
+    service = _MappingVisionService({image: _matching_label()})
+    app.dependency_overrides[get_vision_service] = lambda: lambda: service
+    client = TestClient(app)
+    item = _application_item("label-1")
+    item["government_warning"] = "   "
+
+    response = client.post(
+        "/verify/batch",
+        data={"items": json.dumps([item])},
+        files=[("images", ("front-1.png", image, "image/png"))],
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["summary"]["passed"] == 0
+    assert body["summary"]["needs_review"] == 1
+    assert body["items"][0]["verdict"] == "NEEDS_REVIEW"
+    assert body["items"][0]["error"] == "Please complete all required application fields: Government Warning."
+    assert service.calls == []
+
+
+def test_batch_empty_uploaded_file_becomes_item_error_without_failing_batch() -> None:
+    valid_image = _image_bytes((120, 30, 60))
+    service = _MappingVisionService({valid_image: _matching_label()})
+    app.dependency_overrides[get_vision_service] = lambda: lambda: service
+    client = TestClient(app)
+
+    response = client.post(
+        "/verify/batch",
+        data={"items": json.dumps([_application_item("label-1"), _application_item("label-2")])},
+        files=[
+            ("images", ("front-1.png", valid_image, "image/png")),
+            ("images", ("front-2.png", b"", "image/png")),
+        ],
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["summary"]["passed"] == 1
+    assert body["summary"]["needs_review"] == 1
+    assert body["items"][1]["error"] == "Please upload a non-empty image file for this label."
+    assert service.calls == [(valid_image, "image/png")]
+
+
 def test_batch_processes_labels_concurrently(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BATCH_CONCURRENCY", "3")
     images = [

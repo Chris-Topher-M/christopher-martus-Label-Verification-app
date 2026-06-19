@@ -51,15 +51,30 @@ def _image_bytes(size: tuple[int, int] = (100, 80), mode: str = "RGB") -> bytes:
 def test_preprocess_downscales_large_image_and_encodes_jpeg() -> None:
     result = preprocess_image(_image_bytes(size=(3200, 1200)), "image/png")
 
-    assert result.width == 1600
-    assert result.height == 600
+    assert result.width == 1280
+    assert result.height == 480
     assert result.content_type == "image/jpeg"
     assert result.data_url.startswith("data:image/jpeg;base64,")
 
     with Image.open(BytesIO(result.image_bytes)) as encoded:
         assert encoded.format == "JPEG"
         assert encoded.mode == "RGB"
-        assert encoded.size == (1600, 600)
+        assert encoded.size == (1280, 480)
+
+
+def test_preprocess_honors_configured_size_and_quality_bounds() -> None:
+    result = preprocess_image(
+        _image_bytes(size=(3200, 1200)),
+        "image/png",
+        max_long_edge_pixels=1024,
+        jpeg_quality=70,
+    )
+
+    assert result.width == 1024
+    assert result.height == 384
+    assert len(result.image_bytes) < len(
+        preprocess_image(_image_bytes(size=(3200, 1200)), "image/png", max_long_edge_pixels=1600).image_bytes
+    )
 
 
 def test_preprocess_rejects_corrupt_bytes_cleanly() -> None:
@@ -69,7 +84,15 @@ def test_preprocess_rejects_corrupt_bytes_cleanly() -> None:
 
 def test_openai_service_uses_injected_client_and_structured_output() -> None:
     client = _FakeClient(_label_payload())
-    service = OpenAIVisionService(client=client, model="test-model", timeout_seconds=3.5)
+    service = OpenAIVisionService(
+        client=client,
+        model="test-model",
+        timeout_seconds=3.5,
+        max_long_edge_pixels=1024,
+        jpeg_quality=75,
+        image_detail="low",
+        max_output_tokens=350,
+    )
 
     label = service.extract_label(_image_bytes(), "image/png")
 
@@ -83,8 +106,28 @@ def test_openai_service_uses_injected_client_and_structured_output() -> None:
     assert call["text"]["format"]["schema"]["additionalProperties"] is False
     image_part = call["input"][0]["content"][1]
     assert image_part["type"] == "input_image"
-    assert image_part["detail"] == "high"
+    assert image_part["detail"] == "low"
     assert image_part["image_url"].startswith("data:image/jpeg;base64,")
+    assert call["max_output_tokens"] == 350
+
+
+def test_openai_service_from_env_uses_tuning_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("VISION_MODEL", "test-model")
+    monkeypatch.setenv("VISION_TIMEOUT_SECONDS", "3.25")
+    monkeypatch.setenv("VISION_MAX_LONG_EDGE_PIXELS", "1024")
+    monkeypatch.setenv("VISION_JPEG_QUALITY", "70")
+    monkeypatch.setenv("VISION_IMAGE_DETAIL", "low")
+    monkeypatch.setenv("VISION_MAX_OUTPUT_TOKENS", "300")
+
+    service = OpenAIVisionService.from_env()
+
+    assert service._model == "test-model"
+    assert service._timeout_seconds == 3.25
+    assert service._max_long_edge_pixels == 1024
+    assert service._jpeg_quality == 70
+    assert service._image_detail == "low"
+    assert service._max_output_tokens == 300
 
 
 def test_unknown_placeholder_values_become_none() -> None:

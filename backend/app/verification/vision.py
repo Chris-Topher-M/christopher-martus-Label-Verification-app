@@ -6,6 +6,7 @@ from io import BytesIO
 import json
 import logging
 import os
+import time
 from typing import Any, Protocol
 
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -18,8 +19,15 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_VISION_MODEL = "gpt-5.4-mini"
 DEFAULT_TIMEOUT_SECONDS = 4.0
-MAX_LONG_EDGE_PIXELS = 1600
-JPEG_QUALITY = 85
+DEFAULT_MAX_LONG_EDGE_PIXELS = 1280
+DEFAULT_JPEG_QUALITY = 80
+DEFAULT_IMAGE_DETAIL = "high"
+DEFAULT_MAX_OUTPUT_TOKENS = 420
+MIN_LONG_EDGE_PIXELS = 768
+MAX_LONG_EDGE_PIXELS = 2000
+MIN_JPEG_QUALITY = 55
+MAX_JPEG_QUALITY = 95
+ALLOWED_IMAGE_DETAILS = {"low", "high", "auto"}
 
 _FIELDS = (
     "brand_name",
@@ -62,10 +70,26 @@ class OpenAIVisionService:
         client: Any,
         model: str = DEFAULT_VISION_MODEL,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+        max_long_edge_pixels: int = DEFAULT_MAX_LONG_EDGE_PIXELS,
+        jpeg_quality: int = DEFAULT_JPEG_QUALITY,
+        image_detail: str = DEFAULT_IMAGE_DETAIL,
+        max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
     ) -> None:
         self._client = client
         self._model = model
         self._timeout_seconds = timeout_seconds
+        self._max_long_edge_pixels = _clamp_int(
+            max_long_edge_pixels,
+            minimum=MIN_LONG_EDGE_PIXELS,
+            maximum=MAX_LONG_EDGE_PIXELS,
+        )
+        self._jpeg_quality = _clamp_int(
+            jpeg_quality,
+            minimum=MIN_JPEG_QUALITY,
+            maximum=MAX_JPEG_QUALITY,
+        )
+        self._image_detail = image_detail if image_detail in ALLOWED_IMAGE_DETAILS else DEFAULT_IMAGE_DETAIL
+        self._max_output_tokens = max(max_output_tokens, 200)
 
     @classmethod
     def from_env(cls) -> "OpenAIVisionService":
@@ -75,16 +99,30 @@ class OpenAIVisionService:
 
         from openai import OpenAI
 
-        timeout_seconds = float(os.environ.get("VISION_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS))
+        timeout_seconds = _env_float("VISION_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS)
         return cls(
             client=OpenAI(api_key=api_key, timeout=timeout_seconds),
             model=os.environ.get("VISION_MODEL", DEFAULT_VISION_MODEL),
             timeout_seconds=timeout_seconds,
+            max_long_edge_pixels=_env_int("VISION_MAX_LONG_EDGE_PIXELS", DEFAULT_MAX_LONG_EDGE_PIXELS),
+            jpeg_quality=_env_int("VISION_JPEG_QUALITY", DEFAULT_JPEG_QUALITY),
+            image_detail=os.environ.get("VISION_IMAGE_DETAIL", DEFAULT_IMAGE_DETAIL).strip().lower(),
+            max_output_tokens=_env_int("VISION_MAX_OUTPUT_TOKENS", DEFAULT_MAX_OUTPUT_TOKENS),
         )
 
     def extract_label(self, image_bytes: bytes, content_type: str | None = None) -> ExtractedLabel:
-        preprocessed = preprocess_image(image_bytes, content_type)
+        started_at = time.perf_counter()
+        preprocess_started_at = time.perf_counter()
+        preprocessed = preprocess_image(
+            image_bytes,
+            content_type,
+            max_long_edge_pixels=self._max_long_edge_pixels,
+            jpeg_quality=self._jpeg_quality,
+        )
+        preprocessing_ms = int((time.perf_counter() - preprocess_started_at) * 1000)
+
         try:
+            api_started_at = time.perf_counter()
             response = self._client.responses.create(
                 model=self._model,
                 instructions=_EXTRACTION_INSTRUCTIONS,
@@ -99,22 +137,40 @@ class OpenAIVisionService:
                             {
                                 "type": "input_image",
                                 "image_url": preprocessed.data_url,
-                                "detail": "high",
+                                "detail": self._image_detail,
                             },
                         ],
                     }
                 ],
                 text={"format": _STRUCTURED_OUTPUT_FORMAT},
                 reasoning={"effort": "low"},
-                max_output_tokens=600,
+                max_output_tokens=self._max_output_tokens,
                 store=False,
                 timeout=self._timeout_seconds,
             )
+            api_ms = int((time.perf_counter() - api_started_at) * 1000)
         except Exception as exc:
             logger.warning("Vision extraction API call failed: %s", type(exc).__name__, exc_info=True)
             return all_null_label()
 
-        return parse_extracted_label_response(response)
+        parse_started_at = time.perf_counter()
+        label = parse_extracted_label_response(response)
+        parse_ms = int((time.perf_counter() - parse_started_at) * 1000)
+        total_ms = int((time.perf_counter() - started_at) * 1000)
+        logger.info(
+            "Vision extraction completed: preprocessing_ms=%s api_ms=%s parse_ms=%s total_ms=%s "
+            "encoded_bytes=%s width=%s height=%s detail=%s model=%s",
+            preprocessing_ms,
+            api_ms,
+            parse_ms,
+            total_ms,
+            len(preprocessed.image_bytes),
+            preprocessed.width,
+            preprocessed.height,
+            self._image_detail,
+            self._model,
+        )
+        return label
 
 
 class MockVisionService:
@@ -145,7 +201,13 @@ def all_null_label() -> ExtractedLabel:
     return ExtractedLabel()
 
 
-def preprocess_image(image_bytes: bytes, content_type: str | None = None) -> PreprocessedImage:
+def preprocess_image(
+    image_bytes: bytes,
+    content_type: str | None = None,
+    *,
+    max_long_edge_pixels: int = DEFAULT_MAX_LONG_EDGE_PIXELS,
+    jpeg_quality: int = DEFAULT_JPEG_QUALITY,
+) -> PreprocessedImage:
     try:
         with Image.open(BytesIO(image_bytes)) as raw_image:
             image = ImageOps.exif_transpose(raw_image)
@@ -154,10 +216,16 @@ def preprocess_image(image_bytes: bytes, content_type: str | None = None) -> Pre
         raise ImagePreprocessingError("Uploaded file is not a readable image.") from exc
 
     image = _flatten_to_rgb(image)
-    image.thumbnail((MAX_LONG_EDGE_PIXELS, MAX_LONG_EDGE_PIXELS), Image.Resampling.LANCZOS)
+    max_long_edge_pixels = _clamp_int(
+        max_long_edge_pixels,
+        minimum=MIN_LONG_EDGE_PIXELS,
+        maximum=MAX_LONG_EDGE_PIXELS,
+    )
+    jpeg_quality = _clamp_int(jpeg_quality, minimum=MIN_JPEG_QUALITY, maximum=MAX_JPEG_QUALITY)
+    image.thumbnail((max_long_edge_pixels, max_long_edge_pixels), Image.Resampling.LANCZOS)
 
     output = BytesIO()
-    image.save(output, format="JPEG", quality=JPEG_QUALITY, optimize=True)
+    image.save(output, format="JPEG", quality=jpeg_quality, optimize=True)
     encoded_bytes = output.getvalue()
     data_url = "data:image/jpeg;base64," + base64.b64encode(encoded_bytes).decode("ascii")
 
@@ -258,6 +326,32 @@ def _clean_field_value(field: str, value: Any) -> Any:
     if field == "government_warning":
         return " ".join(value.split())
     return value.strip()
+
+
+def _env_int(name: str, default: int) -> int:
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    try:
+        return int(raw_value)
+    except ValueError:
+        logger.warning("Invalid %s=%r; using default.", name, raw_value)
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    try:
+        return float(raw_value)
+    except ValueError:
+        logger.warning("Invalid %s=%r; using default.", name, raw_value)
+        return default
+
+
+def _clamp_int(value: int, *, minimum: int, maximum: int) -> int:
+    return min(max(value, minimum), maximum)
 
 
 _EXTRACTION_INSTRUCTIONS = """

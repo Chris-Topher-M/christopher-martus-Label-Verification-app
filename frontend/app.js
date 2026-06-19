@@ -248,6 +248,7 @@ function renderBatchRow(item) {
   removeButton.type = "button";
   removeButton.className = "remove-button";
   removeButton.textContent = "Remove";
+  removeButton.setAttribute("aria-label", `Remove ${item.file.name} from the batch`);
   removeButton.addEventListener("click", () => removeBatchItem(item.id));
 
   header.append(preview, title, removeButton);
@@ -449,6 +450,7 @@ function showError(target, message, details = []) {
 
   target.hidden = false;
   target.scrollIntoView({ behavior: "smooth", block: "center" });
+  target.focus({ preventScroll: true });
 }
 
 function hideError(target) {
@@ -492,6 +494,7 @@ function renderSingleResults(data) {
   results.append(fieldResults, actions);
   results.hidden = false;
   results.scrollIntoView({ behavior: "smooth", block: "start" });
+  results.focus({ preventScroll: true });
 }
 
 function renderBatchResults(data) {
@@ -526,6 +529,7 @@ function renderBatchResults(data) {
   batchResults.append(summaryBand, elapsedTime, resultList, actions);
   batchResults.hidden = false;
   batchResults.scrollIntoView({ behavior: "smooth", block: "start" });
+  batchResults.focus({ preventScroll: true });
 }
 
 function summaryMetric(label, value) {

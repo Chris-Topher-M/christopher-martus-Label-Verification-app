@@ -114,7 +114,7 @@ def test_missing_image_returns_readable_422() -> None:
 
     assert response.status_code == 422
     assert response.json()["error"]["message"] == "Please provide all required verification fields."
-    assert any("image" in detail for detail in response.json()["error"]["details"])
+    assert any("Label Image" in detail for detail in response.json()["error"]["details"])
 
 
 def test_missing_required_application_field_returns_readable_422() -> None:
@@ -130,7 +130,7 @@ def test_missing_required_application_field_returns_readable_422() -> None:
     )
 
     assert response.status_code == 422
-    assert any("brand_name" in detail for detail in response.json()["error"]["details"])
+    assert any("Brand Name" in detail for detail in response.json()["error"]["details"])
 
 
 def test_blank_required_application_field_returns_readable_422() -> None:
@@ -146,7 +146,7 @@ def test_blank_required_application_field_returns_readable_422() -> None:
 
     assert response.status_code == 422
     assert response.json()["error"]["message"] == "Please complete all required verification fields."
-    assert response.json()["error"]["details"] == ["brand_name: Field is required."]
+    assert response.json()["error"]["details"] == ["Brand Name: Field is required."]
 
 
 def test_unsupported_file_type_returns_415_without_calling_vision() -> None:
