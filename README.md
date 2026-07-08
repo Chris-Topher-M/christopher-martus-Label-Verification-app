@@ -46,19 +46,18 @@ If `uv` is unavailable but dependencies are already installed in `.venv`, use th
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-Required production environment variable:
+## Environment Variables
 
-- `OPENAI_API_KEY`
-
-Optional environment variables:
-
-- `VISION_MODEL`
-- `VISION_TIMEOUT_SECONDS`
-- `VISION_MAX_LONG_EDGE_PIXELS`
-- `VISION_JPEG_QUALITY`
-- `VISION_IMAGE_DETAIL`
-- `VISION_MAX_OUTPUT_TOKENS`
-- `BATCH_CONCURRENCY`
+| Variable | Required | Default | Purpose |
+| --- | --- | --- | --- |
+| `OPENAI_API_KEY` | Yes | None | API key used by `OpenAIVisionService.from_env()` for OpenAI Responses API calls. |
+| `VISION_MODEL` | No | `gpt-5.4-mini` | Vision-capable model name used for label extraction. |
+| `VISION_TIMEOUT_SECONDS` | No | `4.0` | Timeout applied to OpenAI client creation and per-request vision calls. |
+| `VISION_MAX_LONG_EDGE_PIXELS` | No | `1280` | Maximum long edge used when resizing label images before upload to the vision model. |
+| `VISION_JPEG_QUALITY` | No | `80` | JPEG quality used when re-encoding uploaded label images for the vision request. |
+| `VISION_IMAGE_DETAIL` | No | `high` | OpenAI image detail hint for the vision request. Accepted values are `low`, `high`, and `auto`; invalid values fall back to `high`. |
+| `VISION_MAX_OUTPUT_TOKENS` | No | `420` | Maximum response tokens allowed for structured extraction output. |
+| `BATCH_CONCURRENCY` | No | `3` | Maximum number of label verifications processed concurrently in `POST /verify/batch`, clamped to the range `1` to `10`. |
 
 Do not commit `.env`, `.env.*`, request logs, or any file containing real secret values.
 
