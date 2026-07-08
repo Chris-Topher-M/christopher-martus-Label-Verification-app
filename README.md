@@ -7,7 +7,9 @@ Stateless proof-of-concept for checking alcohol label images against expected TT
 - Public repository: https://github.com/Chris-Topher-M/christopher-martus-Label-Verification-app
 - Current reviewed branch: `master`
 - Current reviewed commit: `7fe8842`
-- Deployed frontend/API URL: https://ttb-label-verification-ozud.onrender.com/
+- Deployed frontend/API base URL: https://ttb-label-verification-ozud.onrender.com
+- Deployed health URL: https://ttb-label-verification-ozud.onrender.com/health
+- Last verified live: July 8, 2026
 
 The FastAPI backend serves the plain HTML/CSS/JavaScript frontend, so the frontend and API share one deployed base URL.
 
@@ -116,6 +118,126 @@ Set required and optional environment variables in the hosting provider. Do not 
 - `POST /verify` verifies one label image against one set of application fields.
 - `POST /verify/batch` verifies up to 10 label images with matching application field sets.
 
+## API Examples
+
+Single-label verification with `POST /verify`:
+
+```bash
+curl -X POST "https://ttb-label-verification-ozud.onrender.com/verify" \
+  -F "image=@label.png;type=image/png" \
+  -F "brand_name=Acme Reserve" \
+  -F "class_type=Red Wine" \
+  -F "producer_name=Acme Winery, LLC" \
+  -F "country_of_origin=United States" \
+  -F "alcohol_by_volume=13.5%" \
+  -F "net_contents=750 mL" \
+  -F "government_warning=GOVERNMENT WARNING: (1) ACCORDING TO THE SURGEON GENERAL, WOMEN SHOULD NOT DRINK ALCOHOLIC BEVERAGES DURING PREGNANCY BECAUSE OF THE RISK OF BIRTH DEFECTS. (2) CONSUMPTION OF ALCOHOLIC BEVERAGES IMPAIRS YOUR ABILITY TO DRIVE A CAR OR OPERATE MACHINERY, AND MAY CAUSE HEALTH PROBLEMS."
+```
+
+Expected success response shape:
+
+```json
+{
+  "verdict": "PASS",
+  "fields": [
+    {
+      "field": "brand_name",
+      "application_value": "Acme Reserve",
+      "extracted_value": "Acme Reserve",
+      "normalized_application_value": "acme reserve",
+      "normalized_extracted_value": "acme reserve",
+      "status": "PASS",
+      "score": 100.0,
+      "message": "Fuzzy score met threshold 90."
+    },
+    {
+      "field": "government_warning",
+      "application_value": "GOVERNMENT WARNING: (1) ACCORDING TO THE SURGEON GENERAL, WOMEN SHOULD NOT DRINK ALCOHOLIC BEVERAGES DURING PREGNANCY BECAUSE OF THE RISK OF BIRTH DEFECTS. (2) CONSUMPTION OF ALCOHOLIC BEVERAGES IMPAIRS YOUR ABILITY TO DRIVE A CAR OR OPERATE MACHINERY, AND MAY CAUSE HEALTH PROBLEMS.",
+      "extracted_value": "GOVERNMENT WARNING: (1) ACCORDING TO THE SURGEON GENERAL, WOMEN SHOULD NOT DRINK ALCOHOLIC BEVERAGES DURING PREGNANCY BECAUSE OF THE RISK OF BIRTH DEFECTS. (2) CONSUMPTION OF ALCOHOLIC BEVERAGES IMPAIRS YOUR ABILITY TO DRIVE A CAR OR OPERATE MACHINERY, AND MAY CAUSE HEALTH PROBLEMS.",
+      "normalized_application_value": "GOVERNMENT WARNING: (1) ACCORDING TO THE SURGEON GENERAL, WOMEN SHOULD NOT DRINK ALCOHOLIC BEVERAGES DURING PREGNANCY BECAUSE OF THE RISK OF BIRTH DEFECTS. (2) CONSUMPTION OF ALCOHOLIC BEVERAGES IMPAIRS YOUR ABILITY TO DRIVE A CAR OR OPERATE MACHINERY, AND MAY CAUSE HEALTH PROBLEMS.",
+      "normalized_extracted_value": "GOVERNMENT WARNING: (1) ACCORDING TO THE SURGEON GENERAL, WOMEN SHOULD NOT DRINK ALCOHOLIC BEVERAGES DURING PREGNANCY BECAUSE OF THE RISK OF BIRTH DEFECTS. (2) CONSUMPTION OF ALCOHOLIC BEVERAGES IMPAIRS YOUR ABILITY TO DRIVE A CAR OR OPERATE MACHINERY, AND MAY CAUSE HEALTH PROBLEMS.",
+      "status": "PASS",
+      "score": null,
+      "message": "Government warning matched exactly."
+    }
+  ],
+  "latency_ms": 1800
+}
+```
+
+Batch verification with `POST /verify/batch`:
+
+```bash
+curl -X POST "https://ttb-label-verification-ozud.onrender.com/verify/batch" \
+  -F 'items=[{"client_id":"label-1","brand_name":"Acme Reserve","class_type":"Red Wine","producer_name":"Acme Winery, LLC","country_of_origin":"United States","alcohol_by_volume":"13.5%","net_contents":"750 mL","government_warning":"GOVERNMENT WARNING: (1) ACCORDING TO THE SURGEON GENERAL, WOMEN SHOULD NOT DRINK ALCOHOLIC BEVERAGES DURING PREGNANCY BECAUSE OF THE RISK OF BIRTH DEFECTS. (2) CONSUMPTION OF ALCOHOLIC BEVERAGES IMPAIRS YOUR ABILITY TO DRIVE A CAR OR OPERATE MACHINERY, AND MAY CAUSE HEALTH PROBLEMS."},{"client_id":"label-2","brand_name":"Acme Reserve","class_type":"Red Wine","producer_name":"Acme Winery, LLC","country_of_origin":"United States","alcohol_by_volume":"13.5%","net_contents":"750 mL","government_warning":"GOVERNMENT WARNING: (1) ACCORDING TO THE SURGEON GENERAL, WOMEN SHOULD NOT DRINK ALCOHOLIC BEVERAGES DURING PREGNANCY BECAUSE OF THE RISK OF BIRTH DEFECTS. (2) CONSUMPTION OF ALCOHOLIC BEVERAGES IMPAIRS YOUR ABILITY TO DRIVE A CAR OR OPERATE MACHINERY, AND MAY CAUSE HEALTH PROBLEMS."}]' \
+  -F "images=@label-1.png;type=image/png" \
+  -F "images=@label-2.png;type=image/png"
+```
+
+Expected batch success response shape:
+
+```json
+{
+  "summary": {
+    "passed": 2,
+    "needs_review": 0,
+    "total": 2,
+    "latency_ms": 3200
+  },
+  "items": [
+    {
+      "client_id": "label-1",
+      "filename": "label-1.png",
+      "verdict": "PASS",
+      "fields": [
+        {
+          "field": "brand_name",
+          "application_value": "Acme Reserve",
+          "extracted_value": "Acme Reserve",
+          "normalized_application_value": "acme reserve",
+          "normalized_extracted_value": "acme reserve",
+          "status": "PASS",
+          "score": 100.0,
+          "message": "Fuzzy score met threshold 90."
+        }
+      ],
+      "latency_ms": 1500,
+      "error": null
+    },
+    {
+      "client_id": "label-2",
+      "filename": "label-2.png",
+      "verdict": "PASS",
+      "fields": [
+        {
+          "field": "brand_name",
+          "application_value": "Acme Reserve",
+          "extracted_value": "Acme Reserve",
+          "normalized_application_value": "acme reserve",
+          "normalized_extracted_value": "acme reserve",
+          "status": "PASS",
+          "score": 100.0,
+          "message": "Fuzzy score met threshold 90."
+        }
+      ],
+      "latency_ms": 1600,
+      "error": null
+    }
+  ]
+}
+```
+
+Example 4xx error response from `POST /verify` when the uploaded file type is not supported:
+
+```json
+{
+  "error": {
+    "message": "Please upload a JPG, PNG, or WebP image.",
+    "details": []
+  }
+}
+```
+
 ## Upload Limits
 
 - Supported image formats: JPG, PNG, WebP
@@ -169,16 +291,16 @@ Fallback:
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-Run the deployed smoke checklist after replacing the URL:
+Run the deployed smoke checklist:
 
 ```powershell
-uv run python scripts/run_live_checklist.py https://your-deployed-url.example
+uv run python scripts/run_live_checklist.py https://ttb-label-verification-ozud.onrender.com
 ```
 
 Fallback:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\run_live_checklist.py https://your-deployed-url.example
+.\.venv\Scripts\python.exe scripts\run_live_checklist.py https://ttb-label-verification-ozud.onrender.com
 ```
 
 Manual live verification:
