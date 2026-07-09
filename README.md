@@ -94,7 +94,19 @@ The repository includes `render.yaml` for a Render free-tier web service.
 
 Set required and optional environment variables in the hosting provider. Do not rely on local `.env` files in production.
 
-## Approach
+## Approach / AI Workflow
+
+This app was built with Codex CLI using the `PLAN` / `REVIEW` / `EXECUTE` cadence defined in `AGENTS.md`.
+
+- `PLAN`: the agent read the current code and requirements, proposed an approach, and wrote no code.
+- `REVIEW`: the plan was critiqued against the project requirements and edge cases, then narrowed or corrected before implementation.
+- `EXECUTE`: the agent implemented only the approved plan, added or updated tests, and self-verified before the phase was considered complete.
+
+Each phase used a human gate between `PLAN`, `REVIEW`, and `EXECUTE`. That gate was intentional: it prevented jumping straight from a draft plan to a large unreviewed code drop, which reduced scope creep and missed edge cases.
+
+AI-generated work included implementation drafts, refactors, tests, and documentation updates proposed through Codex. Human-written or human-controlled work included the project requirements, phase approval, scope checks between steps, and the decision to stop or revise work before execution when a plan did not yet meet the requirements.
+
+Technical approach:
 
 - FastAPI handles uploads, validation, static frontend serving, and JSON API responses.
 - The vision service preprocesses uploaded images, calls the OpenAI vision model, and asks for structured output.
