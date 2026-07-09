@@ -119,7 +119,8 @@ Technical approach:
 - Python 3.12
 - FastAPI
 - Plain HTML/CSS/JavaScript frontend
-- OpenAI Responses API for vision extraction
+- OpenAI Responses API for vision extraction with `gpt-5.4-mini`
+- Verified against OpenAI's current model list on July 9, 2026
 - Pillow for image preprocessing
 - Pytest for automated tests
 - Render deployment configuration
