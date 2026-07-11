@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 from io import BytesIO
 
@@ -42,18 +43,20 @@ def test_verify_happy_path_returns_full_result_and_latency(caplog: pytest.LogCap
 
     assert response.status_code == 200
     body = response.json()
-    assert body["verdict"] == "PASS"
+    assert body["overall_verdict"] == "APPROVED"
     assert body["latency_ms"] >= 0
-    assert [field["field"] for field in body["fields"]] == [
+    assert [field["field"] for field in body["results"]] == [
         "brand_name",
         "class_type",
-        "producer_name",
+        "producer",
         "country_of_origin",
-        "alcohol_by_volume",
+        "abv",
         "net_contents",
         "government_warning",
     ]
-    assert all(field["status"] == "PASS" for field in body["fields"])
+    assert all(field["status"] == "PASS" for field in body["results"])
+    assert set(body) == {"results", "overall_verdict", "latency_ms"}
+    assert set(body["results"][0]) == {"field", "match_type", "expected", "found", "status"}
     assert service.calls == [(_image_bytes(), "image/png")]
     assert "POST /verify completed" in caplog.text
 
@@ -64,9 +67,9 @@ def test_verify_mismatch_returns_expected_found_values_and_needs_review() -> Non
         ExtractedLabel(
             brand_name="Mountain Cellars",
             class_type="Red Wine",
-            producer_name="Acme Winery, LLC",
+            producer="Acme Winery, LLC",
             country_of_origin="United States",
-            alcohol_by_volume="13.5%",
+            abv="13.5%",
             net_contents="750 mL",
             government_warning=extracted_warning,
         )
@@ -82,12 +85,12 @@ def test_verify_mismatch_returns_expected_found_values_and_needs_review() -> Non
 
     assert response.status_code == 200
     body = response.json()
-    assert body["verdict"] == "NEEDS_REVIEW"
-    failed = {field["field"]: field for field in body["fields"] if field["status"] == "FAIL"}
-    assert failed["brand_name"]["application_value"] == "Acme Reserve"
-    assert failed["brand_name"]["extracted_value"] == "Mountain Cellars"
-    assert failed["government_warning"]["application_value"] == REQUIRED_WARNING
-    assert failed["government_warning"]["extracted_value"] == extracted_warning
+    assert body["overall_verdict"] == "NEEDS_REVIEW"
+    failed = {field["field"]: field for field in body["results"] if field["status"] == "FAIL"}
+    assert failed["brand_name"]["expected"] == "Acme Reserve"
+    assert failed["brand_name"]["found"] == "Mountain Cellars"
+    assert failed["government_warning"]["expected"] == REQUIRED_WARNING
+    assert failed["government_warning"]["found"] == extracted_warning
 
 
 def test_verify_passes_uploaded_bytes_and_content_type_to_vision_service() -> None:
@@ -104,6 +107,21 @@ def test_verify_passes_uploaded_bytes_and_content_type_to_vision_service() -> No
 
     assert response.status_code == 200
     assert service.calls == [(image_bytes, "image/webp")]
+
+
+def test_verify_runs_vision_extraction_outside_the_event_loop() -> None:
+    service = _NoEventLoopVisionService()
+    app.dependency_overrides[get_vision_service] = lambda: lambda: service
+    client = TestClient(app)
+
+    response = client.post(
+        "/verify",
+        data=_application_form(),
+        files={"image": ("label.png", _image_bytes(), "image/png")},
+    )
+
+    assert response.status_code == 200
+    assert service.called_without_running_loop is True
 
 
 def test_missing_image_returns_readable_422() -> None:
@@ -240,17 +258,17 @@ def test_all_null_extraction_returns_needs_review_not_500() -> None:
     )
 
     assert response.status_code == 200
-    assert response.json()["verdict"] == "NEEDS_REVIEW"
-    assert all(field["status"] == "FAIL" for field in response.json()["fields"])
+    assert response.json()["overall_verdict"] == "NEEDS_REVIEW"
+    assert all(field["status"] == "FAIL" for field in response.json()["results"])
 
 
 def _application_form(**overrides: str) -> dict[str, str]:
     form = {
         "brand_name": "Acme Reserve",
         "class_type": "Red Wine",
-        "producer_name": "Acme Winery, LLC",
+        "producer": "Acme Winery, LLC",
         "country_of_origin": "United States",
-        "alcohol_by_volume": "13.5%",
+        "abv": "13.5%",
         "net_contents": "750 mL",
         "government_warning": REQUIRED_WARNING,
     }
@@ -273,3 +291,14 @@ class _PreprocessingFailureService:
 class _UnexpectedFailureService:
     def extract_label(self, image_bytes: bytes, content_type: str | None = None) -> ExtractedLabel:
         raise RuntimeError("secret failure details")
+
+
+class _NoEventLoopVisionService:
+    def __init__(self) -> None:
+        self.called_without_running_loop = False
+
+    def extract_label(self, image_bytes: bytes, content_type: str | None = None) -> ExtractedLabel:
+        with pytest.raises(RuntimeError):
+            asyncio.get_running_loop()
+        self.called_without_running_loop = True
+        return MockVisionService().label

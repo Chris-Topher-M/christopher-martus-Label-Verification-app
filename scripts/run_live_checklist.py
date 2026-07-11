@@ -76,7 +76,7 @@ def check_health(client: httpx.Client, base_url: str) -> CheckResult:
 def check_valid_label(client: httpx.Client, base_url: str) -> CheckResult:
     response, elapsed = post_verify(client, base_url, image_bytes(), application_form())
     body = safe_json(response)
-    passed = response.status_code == 200 and body.get("verdict") == "PASS"
+    passed = response.status_code == 200 and body.get("overall_verdict") == "APPROVED"
     return CheckResult("valid label", passed, verdict_detail(response, body), elapsed)
 
 
@@ -87,7 +87,7 @@ def check_mismatch(client: httpx.Client, base_url: str) -> CheckResult:
     brand = field_result(body, "brand_name")
     passed = (
         response.status_code == 200
-        and body.get("verdict") == "NEEDS_REVIEW"
+        and body.get("overall_verdict") == "NEEDS_REVIEW"
         and brand.get("status") == "FAIL"
     )
     return CheckResult("mismatches", passed, verdict_detail(response, body), elapsed)
@@ -103,10 +103,10 @@ def check_case_only(client: httpx.Client, base_url: str) -> CheckResult:
 
 
 def check_abv_units(client: httpx.Client, base_url: str) -> CheckResult:
-    form = application_form(alcohol_by_volume="0.135", net_contents="0.75 L")
+    form = application_form(abv="0.135", net_contents="0.75 L")
     response, elapsed = post_verify(client, base_url, image_bytes(), form)
     body = safe_json(response)
-    abv = field_result(body, "alcohol_by_volume")
+    abv = field_result(body, "abv")
     net = field_result(body, "net_contents")
     passed = response.status_code == 200 and abv.get("status") == "PASS" and net.get("status") == "PASS"
     return CheckResult("ABV and units normalization", passed, verdict_detail(response, body), elapsed)
@@ -158,7 +158,7 @@ def check_imperfect_image(client: httpx.Client, base_url: str) -> CheckResult:
         application_form(),
     )
     body = safe_json(response)
-    passed = response.status_code == 200 and body.get("verdict") == "NEEDS_REVIEW"
+    passed = response.status_code == 200 and body.get("overall_verdict") == "NEEDS_REVIEW"
     return CheckResult("imperfect readable image", passed, verdict_detail(response, body), elapsed)
 
 
@@ -216,13 +216,13 @@ def check_single_label_speed(client: httpx.Client, base_url: str, speed_runs: in
     for _ in range(speed_runs):
         response, elapsed = post_verify(client, base_url, image_bytes(), application_form())
         latencies.append(elapsed)
-        verdicts.append(str(safe_json(response).get("verdict")))
+        verdicts.append(str(safe_json(response).get("overall_verdict")))
 
     sorted_latencies = sorted(latencies)
     p95 = sorted_latencies[min(len(sorted_latencies) - 1, int(len(sorted_latencies) * 0.95))]
     maximum = max(latencies)
     mean = round(statistics.mean(latencies), 1)
-    passed = maximum <= 5000 and p95 <= 4500 and all(verdict == "PASS" for verdict in verdicts)
+    passed = maximum <= 5000 and p95 <= 4500 and all(verdict == "APPROVED" for verdict in verdicts)
     detail = f"runs={latencies} p95={p95} max={maximum} mean={mean} verdicts={verdicts}"
     return CheckResult("single-label speed", passed, detail, maximum)
 
@@ -303,9 +303,9 @@ def application_form(**overrides: str) -> dict[str, str]:
     form = {
         "brand_name": "Acme Reserve",
         "class_type": "Red Wine",
-        "producer_name": "Acme Winery, LLC",
+        "producer": "Acme Winery, LLC",
         "country_of_origin": "United States",
-        "alcohol_by_volume": "13.5%",
+        "abv": "13.5%",
         "net_contents": "750 mL",
         "government_warning": REQUIRED_WARNING,
     }
@@ -322,10 +322,10 @@ def safe_json(response: httpx.Response) -> dict[str, Any]:
 
 
 def field_result(body: dict[str, Any], field_name: str) -> dict[str, Any]:
-    fields = body.get("fields", [])
-    if not isinstance(fields, list):
+    results = body.get("results", [])
+    if not isinstance(results, list):
         return {}
-    for field in fields:
+    for field in results:
         if isinstance(field, dict) and field.get("field") == field_name:
             return field
     return {}
@@ -334,11 +334,11 @@ def field_result(body: dict[str, Any], field_name: str) -> dict[str, Any]:
 def verdict_detail(response: httpx.Response, body: dict[str, Any]) -> str:
     failed = [
         f"{field.get('field')}={field.get('status')}"
-        for field in body.get("fields", [])
+        for field in body.get("results", [])
         if isinstance(field, dict) and field.get("status") != "PASS"
     ]
     suffix = f" failed_fields={failed}" if failed else ""
-    return f"HTTP {response.status_code} verdict={body.get('verdict')}{suffix}"
+    return f"HTTP {response.status_code} verdict={body.get('overall_verdict')}{suffix}"
 
 
 if __name__ == "__main__":

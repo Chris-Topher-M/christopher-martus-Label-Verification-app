@@ -31,9 +31,11 @@ def _label_payload(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
         "brand_name": "Acme Reserve",
         "class_type": "Red Wine",
-        "producer_name": "Acme Winery, LLC",
+        "producer": "Acme Winery, LLC",
         "country_of_origin": "United States",
-        "alcohol_by_volume": "13.5%",
+        "abv": "13.5%",
+        "raw_text": "Acme Reserve Red Wine",
+        "extraction_confidence": 0.95,
         "net_contents": "750 mL",
         "government_warning": REQUIRED_WARNING,
     }
@@ -138,7 +140,7 @@ def test_unknown_placeholder_values_become_none() -> None:
     assert label.brand_name is None
 
 
-def test_government_warning_is_preserved_as_single_trimmed_line() -> None:
+def test_government_warning_preserves_visible_whitespace() -> None:
     warning_with_line_break = REQUIRED_WARNING.replace(" WOMEN ", " WOMEN\n")
     response = SimpleNamespace(
         output_text=json.dumps(_label_payload(government_warning=f"  {warning_with_line_break}  "))
@@ -146,7 +148,14 @@ def test_government_warning_is_preserved_as_single_trimmed_line() -> None:
 
     label = parse_extracted_label_response(response)
 
-    assert label.government_warning == REQUIRED_WARNING
+    assert label.government_warning == f"  {warning_with_line_break}  ".strip()
+
+
+def test_extraction_metadata_is_parsed() -> None:
+    label = parse_extracted_label_response(SimpleNamespace(output_text=json.dumps(_label_payload())))
+
+    assert label.raw_text == "Acme Reserve Red Wine"
+    assert label.extraction_confidence == 0.95
 
 
 def test_extra_structured_field_returns_all_null_label() -> None:

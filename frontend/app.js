@@ -1,6 +1,7 @@
 const form = document.querySelector("#verify-form");
 const submitButton = document.querySelector("#submit-button");
 const loadingMessage = document.querySelector("#loading-message");
+const coldStartMessage = document.querySelector("#cold-start-message");
 const errorBox = document.querySelector("#error-box");
 const results = document.querySelector("#results");
 const statusLine = document.querySelector("#status-line");
@@ -23,6 +24,7 @@ const batchResults = document.querySelector("#batch-results");
 
 const VERIFY_TIMEOUT_MS = 30000;
 const PROGRESS_DELAY_MS = 600;
+const COLD_START_DELAY_MS = 2000;
 const MAX_BATCH_LABELS = 10;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
@@ -30,9 +32,9 @@ const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const FIELDS = [
   { name: "brand_name", label: "Brand Name", type: "input" },
   { name: "class_type", label: "Class / Type", type: "input" },
-  { name: "producer_name", label: "Producer Name", type: "input" },
+  { name: "producer", label: "Producer Name", type: "input" },
   { name: "country_of_origin", label: "Country of Origin", type: "input" },
-  { name: "alcohol_by_volume", label: "Alcohol by Volume", type: "input" },
+  { name: "abv", label: "Alcohol by Volume", type: "input" },
   { name: "net_contents", label: "Net Contents", type: "input" },
   { name: "government_warning", label: "Government Warning", type: "textarea" },
 ];
@@ -40,6 +42,7 @@ const FIELDS = [
 const FIELD_LABELS = Object.fromEntries(FIELDS.map((field) => [field.name, field.label]));
 let previewUrl = null;
 let batchItems = [];
+let hasCompletedSingleRequest = false;
 
 singleModeButton.addEventListener("click", () => setMode("single"));
 batchModeButton.addEventListener("click", () => setMode("batch"));
@@ -77,6 +80,12 @@ form.addEventListener("submit", async (event) => {
 
   const timeout = new AbortController();
   const timeoutId = window.setTimeout(() => timeout.abort(), VERIFY_TIMEOUT_MS);
+  const formData = new FormData(form);
+  const coldStartId = hasCompletedSingleRequest
+    ? null
+    : window.setTimeout(() => {
+        coldStartMessage.hidden = false;
+      }, COLD_START_DELAY_MS);
 
   setSingleBusy(true);
   statusLine.textContent = "Checking the label.";
@@ -84,7 +93,7 @@ form.addEventListener("submit", async (event) => {
   try {
     const response = await fetch("/verify", {
       method: "POST",
-      body: new FormData(form),
+      body: formData,
       signal: timeout.signal,
     });
     const data = await readJson(response);
@@ -107,6 +116,11 @@ form.addEventListener("submit", async (event) => {
     statusLine.textContent = "The label could not be checked.";
   } finally {
     window.clearTimeout(timeoutId);
+    if (coldStartId !== null) {
+      window.clearTimeout(coldStartId);
+    }
+    coldStartMessage.hidden = true;
+    hasCompletedSingleRequest = true;
     setSingleBusy(false);
   }
 });
@@ -363,6 +377,9 @@ function setSingleBusy(isBusy) {
   submitButton.disabled = isBusy;
   submitButton.textContent = isBusy ? "Checking Label..." : "Verify Label";
   loadingMessage.hidden = !isBusy;
+  if (!isBusy) {
+    coldStartMessage.hidden = true;
+  }
 
   for (const element of form.elements) {
     if (element !== submitButton) {
@@ -461,8 +478,8 @@ function hideError(target) {
 function renderSingleResults(data) {
   results.replaceChildren();
 
-  const verdict = data?.verdict === "PASS" ? "APPROVED" : "NEEDS REVIEW";
-  const verdictClass = data?.verdict === "PASS" ? "approved" : "review";
+  const verdict = data?.overall_verdict === "APPROVED" ? "APPROVED" : "NEEDS REVIEW";
+  const verdictClass = data?.overall_verdict === "APPROVED" ? "approved" : "review";
   const verdictPanel = document.createElement("div");
   verdictPanel.className = `verdict-panel ${verdictClass}`;
 
@@ -480,7 +497,7 @@ function renderSingleResults(data) {
   const fieldResults = document.createElement("div");
   fieldResults.className = "field-results";
 
-  for (const field of orderedFieldResults(data?.fields)) {
+  for (const field of orderedFieldResults(data?.results)) {
     fieldResults.append(renderFieldResult(field));
   }
 
@@ -500,7 +517,7 @@ function renderSingleResults(data) {
 function renderBatchResults(data) {
   batchResults.replaceChildren();
 
-  const summary = data?.summary || { passed: 0, needs_review: 0, total: 0, latency_ms: null };
+  const summary = data?.summary || { passed: 0, needs_review: 0, total: 0 };
   const summaryBand = document.createElement("div");
   summaryBand.className = "batch-summary";
   summaryBand.append(
@@ -508,10 +525,6 @@ function renderBatchResults(data) {
     summaryMetric("Needs Review", summary.needs_review),
     summaryMetric("Total", summary.total),
   );
-
-  const elapsedTime = document.createElement("p");
-  elapsedTime.className = "elapsed-time";
-  elapsedTime.textContent = `Checked in ${formatLatency(summary.latency_ms)}`;
 
   const resultList = document.createElement("div");
   resultList.className = "batch-result-list";
@@ -526,7 +539,7 @@ function renderBatchResults(data) {
     secondaryButton("Edit and Check Again", focusBatchForm),
   );
 
-  batchResults.append(summaryBand, elapsedTime, resultList, actions);
+  batchResults.append(summaryBand, resultList, actions);
   batchResults.hidden = false;
   batchResults.scrollIntoView({ behavior: "smooth", block: "start" });
   batchResults.focus({ preventScroll: true });
@@ -548,14 +561,14 @@ function summaryMetric(label, value) {
 
 function renderBatchResultItem(item) {
   const details = document.createElement("details");
-  details.className = `batch-result-item ${item?.verdict === "PASS" ? "pass" : "review"}`;
+  details.className = `batch-result-item ${item?.overall_verdict === "APPROVED" ? "pass" : "review"}`;
 
   const summary = document.createElement("summary");
   const title = document.createElement("span");
   title.textContent = item?.filename || item?.client_id || "Label";
 
   const status = document.createElement("strong");
-  status.textContent = item?.error ? "Could Not Check" : item?.verdict === "PASS" ? "Passed" : "Needs Review";
+  status.textContent = item?.error ? "Could Not Check" : item?.overall_verdict === "APPROVED" ? "Passed" : "Needs Review";
 
   summary.append(title, status);
   details.append(summary);
@@ -570,7 +583,7 @@ function renderBatchResultItem(item) {
 
   const fieldResults = document.createElement("div");
   fieldResults.className = "field-results compact";
-  for (const field of orderedFieldResults(item?.fields)) {
+  for (const field of orderedFieldResults(item?.results)) {
     fieldResults.append(renderFieldResult(field));
   }
   details.append(fieldResults);
@@ -601,8 +614,8 @@ function renderFieldResult(field) {
     content.append(note);
   } else {
     content.append(
-      resultDetail("Expected", formatValue(field.application_value, "expected")),
-      resultDetail("Found", formatValue(field.extracted_value, "found")),
+      resultDetail("Expected", formatValue(field.expected, "expected")),
+      resultDetail("Found", formatValue(field.found, "found")),
       resultMessage(readableFieldFailure(field)),
     );
   }
@@ -638,16 +651,16 @@ function formatValue(value, kind) {
 }
 
 function readableFieldFailure(field) {
-  if (field.extracted_value === null || field.extracted_value === undefined || String(field.extracted_value).trim() === "") {
+  if (field.found === null || field.found === undefined || String(field.found).trim() === "") {
     return "This field could not be read clearly on the label.";
   }
 
   const messages = {
     brand_name: "The brand name on the label does not match the application.",
     class_type: "The class or type on the label does not match the application.",
-    producer_name: "The producer name on the label does not match the application.",
+    producer: "The producer name on the label does not match the application.",
     country_of_origin: "The country on the label does not match the application.",
-    alcohol_by_volume: "The alcohol percentage is different.",
+    abv: "The alcohol percentage is different.",
     net_contents: "The bottle size is different.",
     government_warning: "Exact match required, including capital letters and punctuation.",
   };

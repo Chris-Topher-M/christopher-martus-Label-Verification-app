@@ -9,16 +9,16 @@ class FieldStatus(StrEnum):
 
 
 class VerificationVerdict(StrEnum):
-    PASS = "PASS"
+    APPROVED = "APPROVED"
     NEEDS_REVIEW = "NEEDS_REVIEW"
 
 
 class ApplicationData(BaseModel):
     brand_name: str
     class_type: str
-    producer_name: str
+    producer: str
     country_of_origin: str
-    alcohol_by_volume: str | float
+    abv: str | float
     net_contents: str
     government_warning: str
 
@@ -26,30 +26,26 @@ class ApplicationData(BaseModel):
 class ExtractedLabel(BaseModel):
     brand_name: str | None = None
     class_type: str | None = None
-    producer_name: str | None = None
+    producer: str | None = None
     country_of_origin: str | None = None
-    alcohol_by_volume: str | float | None = None
+    abv: str | float | None = None
     net_contents: str | None = None
     government_warning: str | None = None
+    raw_text: str | None = None
+    extraction_confidence: float | None = Field(default=None, ge=0, le=1)
 
 
 class FieldResult(BaseModel):
     field: str
-    application_value: str | float | None
-    extracted_value: str | float | None
-    normalized_application_value: str | float | None
-    normalized_extracted_value: str | float | None
+    match_type: str
+    expected: str | float | None
+    found: str | float | None
     status: FieldStatus
-    score: float | None
-    message: str
 
 
 class VerificationResult(BaseModel):
-    verdict: VerificationVerdict
-    fields: list[FieldResult]
-
-
-class VerificationResponse(VerificationResult):
+    results: list[FieldResult]
+    overall_verdict: VerificationVerdict
     latency_ms: int
 
 
@@ -57,14 +53,13 @@ class BatchVerificationSummary(BaseModel):
     passed: int
     needs_review: int
     total: int
-    latency_ms: int
 
 
 class BatchVerificationItem(BaseModel):
     client_id: str | None = None
     filename: str
-    verdict: VerificationVerdict
-    fields: list[FieldResult] = Field(default_factory=list)
+    overall_verdict: VerificationVerdict
+    results: list[FieldResult] = Field(default_factory=list)
     latency_ms: int
     error: str | None = None
 

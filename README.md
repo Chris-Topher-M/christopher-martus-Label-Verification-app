@@ -53,7 +53,7 @@ If `uv` is unavailable but dependencies are already installed in `.venv`, use th
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
 | `OPENAI_API_KEY` | Yes | None | API key used by `OpenAIVisionService.from_env()` for OpenAI Responses API calls. |
-| `VISION_MODEL` | No | `gpt-5.4-mini` | Vision-capable model name used for label extraction. |
+| `VISION_MODEL` | No | `gpt-4o-mini` | Vision-capable model name used for label extraction. |
 | `VISION_TIMEOUT_SECONDS` | No | `4.0` | Timeout applied to OpenAI client creation and per-request vision calls. |
 | `VISION_MAX_LONG_EDGE_PIXELS` | No | `1280` | Maximum long edge used when resizing label images before upload to the vision model. |
 | `VISION_JPEG_QUALITY` | No | `80` | JPEG quality used when re-encoding uploaded label images for the vision request. |
@@ -140,9 +140,9 @@ curl -X POST "https://ttb-label-verification-ozud.onrender.com/verify" \
   -F "image=@label.png;type=image/png" \
   -F "brand_name=Acme Reserve" \
   -F "class_type=Red Wine" \
-  -F "producer_name=Acme Winery, LLC" \
+  -F "producer=Acme Winery, LLC" \
   -F "country_of_origin=United States" \
-  -F "alcohol_by_volume=13.5%" \
+  -F "abv=13.5%" \
   -F "net_contents=750 mL" \
   -F "government_warning=GOVERNMENT WARNING: (1) ACCORDING TO THE SURGEON GENERAL, WOMEN SHOULD NOT DRINK ALCOHOLIC BEVERAGES DURING PREGNANCY BECAUSE OF THE RISK OF BIRTH DEFECTS. (2) CONSUMPTION OF ALCOHOLIC BEVERAGES IMPAIRS YOUR ABILITY TO DRIVE A CAR OR OPERATE MACHINERY, AND MAY CAUSE HEALTH PROBLEMS."
 ```
@@ -151,27 +151,14 @@ Expected success response shape:
 
 ```json
 {
-  "verdict": "PASS",
-  "fields": [
+  "overall_verdict": "APPROVED",
+  "results": [
     {
       "field": "brand_name",
-      "application_value": "Acme Reserve",
-      "extracted_value": "Acme Reserve",
-      "normalized_application_value": "acme reserve",
-      "normalized_extracted_value": "acme reserve",
-      "status": "PASS",
-      "score": 100.0,
-      "message": "Fuzzy score met threshold 90."
-    },
-    {
-      "field": "government_warning",
-      "application_value": "GOVERNMENT WARNING: (1) ACCORDING TO THE SURGEON GENERAL, WOMEN SHOULD NOT DRINK ALCOHOLIC BEVERAGES DURING PREGNANCY BECAUSE OF THE RISK OF BIRTH DEFECTS. (2) CONSUMPTION OF ALCOHOLIC BEVERAGES IMPAIRS YOUR ABILITY TO DRIVE A CAR OR OPERATE MACHINERY, AND MAY CAUSE HEALTH PROBLEMS.",
-      "extracted_value": "GOVERNMENT WARNING: (1) ACCORDING TO THE SURGEON GENERAL, WOMEN SHOULD NOT DRINK ALCOHOLIC BEVERAGES DURING PREGNANCY BECAUSE OF THE RISK OF BIRTH DEFECTS. (2) CONSUMPTION OF ALCOHOLIC BEVERAGES IMPAIRS YOUR ABILITY TO DRIVE A CAR OR OPERATE MACHINERY, AND MAY CAUSE HEALTH PROBLEMS.",
-      "normalized_application_value": "GOVERNMENT WARNING: (1) ACCORDING TO THE SURGEON GENERAL, WOMEN SHOULD NOT DRINK ALCOHOLIC BEVERAGES DURING PREGNANCY BECAUSE OF THE RISK OF BIRTH DEFECTS. (2) CONSUMPTION OF ALCOHOLIC BEVERAGES IMPAIRS YOUR ABILITY TO DRIVE A CAR OR OPERATE MACHINERY, AND MAY CAUSE HEALTH PROBLEMS.",
-      "normalized_extracted_value": "GOVERNMENT WARNING: (1) ACCORDING TO THE SURGEON GENERAL, WOMEN SHOULD NOT DRINK ALCOHOLIC BEVERAGES DURING PREGNANCY BECAUSE OF THE RISK OF BIRTH DEFECTS. (2) CONSUMPTION OF ALCOHOLIC BEVERAGES IMPAIRS YOUR ABILITY TO DRIVE A CAR OR OPERATE MACHINERY, AND MAY CAUSE HEALTH PROBLEMS.",
-      "status": "PASS",
-      "score": null,
-      "message": "Government warning matched exactly."
+      "match_type": "fuzzy",
+      "expected": "Acme Reserve",
+      "found": "Acme Reserve",
+      "status": "PASS"
     }
   ],
   "latency_ms": 1800
@@ -182,7 +169,7 @@ Batch verification with `POST /verify/batch`:
 
 ```bash
 curl -X POST "https://ttb-label-verification-ozud.onrender.com/verify/batch" \
-  -F 'items=[{"client_id":"label-1","brand_name":"Acme Reserve","class_type":"Red Wine","producer_name":"Acme Winery, LLC","country_of_origin":"United States","alcohol_by_volume":"13.5%","net_contents":"750 mL","government_warning":"GOVERNMENT WARNING: (1) ACCORDING TO THE SURGEON GENERAL, WOMEN SHOULD NOT DRINK ALCOHOLIC BEVERAGES DURING PREGNANCY BECAUSE OF THE RISK OF BIRTH DEFECTS. (2) CONSUMPTION OF ALCOHOLIC BEVERAGES IMPAIRS YOUR ABILITY TO DRIVE A CAR OR OPERATE MACHINERY, AND MAY CAUSE HEALTH PROBLEMS."},{"client_id":"label-2","brand_name":"Acme Reserve","class_type":"Red Wine","producer_name":"Acme Winery, LLC","country_of_origin":"United States","alcohol_by_volume":"13.5%","net_contents":"750 mL","government_warning":"GOVERNMENT WARNING: (1) ACCORDING TO THE SURGEON GENERAL, WOMEN SHOULD NOT DRINK ALCOHOLIC BEVERAGES DURING PREGNANCY BECAUSE OF THE RISK OF BIRTH DEFECTS. (2) CONSUMPTION OF ALCOHOLIC BEVERAGES IMPAIRS YOUR ABILITY TO DRIVE A CAR OR OPERATE MACHINERY, AND MAY CAUSE HEALTH PROBLEMS."}]' \
+  -F 'items=[{"client_id":"label-1","brand_name":"Acme Reserve","class_type":"Red Wine","producer":"Acme Winery, LLC","country_of_origin":"United States","abv":"13.5%","net_contents":"750 mL","government_warning":"GOVERNMENT WARNING: ..."}]' \
   -F "images=@label-1.png;type=image/png" \
   -F "images=@label-2.png;type=image/png"
 ```
@@ -194,24 +181,20 @@ Expected batch success response shape:
   "summary": {
     "passed": 2,
     "needs_review": 0,
-    "total": 2,
-    "latency_ms": 3200
+    "total": 2
   },
   "items": [
     {
       "client_id": "label-1",
       "filename": "label-1.png",
-      "verdict": "PASS",
-      "fields": [
+      "overall_verdict": "APPROVED",
+      "results": [
         {
           "field": "brand_name",
-          "application_value": "Acme Reserve",
-          "extracted_value": "Acme Reserve",
-          "normalized_application_value": "acme reserve",
-          "normalized_extracted_value": "acme reserve",
-          "status": "PASS",
-          "score": 100.0,
-          "message": "Fuzzy score met threshold 90."
+          "match_type": "fuzzy",
+          "expected": "Acme Reserve",
+          "found": "Acme Reserve",
+          "status": "PASS"
         }
       ],
       "latency_ms": 1500,
@@ -220,17 +203,14 @@ Expected batch success response shape:
     {
       "client_id": "label-2",
       "filename": "label-2.png",
-      "verdict": "PASS",
-      "fields": [
+      "overall_verdict": "APPROVED",
+      "results": [
         {
           "field": "brand_name",
-          "application_value": "Acme Reserve",
-          "extracted_value": "Acme Reserve",
-          "normalized_application_value": "acme reserve",
-          "normalized_extracted_value": "acme reserve",
-          "status": "PASS",
-          "score": 100.0,
-          "message": "Fuzzy score met threshold 90."
+          "match_type": "fuzzy",
+          "expected": "Acme Reserve",
+          "found": "Acme Reserve",
+          "status": "PASS"
         }
       ],
       "latency_ms": 1600,
@@ -272,7 +252,8 @@ Exact field:
 
 - Government Warning
 
-The government warning must match exactly after extraction, including case, spelling, punctuation, and numbering.
+The government warning must match exactly after whitespace is collapsed, including case, spelling, punctuation, and numbering.
+ABV matches within ±0.1 percentage points (including proof values), and net contents match within ±1 mL (including fl oz).
 
 ## Assumptions
 

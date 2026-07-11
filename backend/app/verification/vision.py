@@ -17,7 +17,7 @@ from backend.app.verification.models import ExtractedLabel
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_VISION_MODEL = "gpt-5.4-mini"
+DEFAULT_VISION_MODEL = "gpt-4o-mini"
 DEFAULT_TIMEOUT_SECONDS = 4.0
 DEFAULT_MAX_LONG_EDGE_PIXELS = 1280
 DEFAULT_JPEG_QUALITY = 80
@@ -32,11 +32,13 @@ ALLOWED_IMAGE_DETAILS = {"low", "high", "auto"}
 _FIELDS = (
     "brand_name",
     "class_type",
-    "producer_name",
+    "producer",
     "country_of_origin",
-    "alcohol_by_volume",
+    "abv",
     "net_contents",
     "government_warning",
+    "raw_text",
+    "extraction_confidence",
 )
 _NULL_STRINGS = {"", "unknown", "not visible", "not shown", "n/a", "none", "null", "unreadable"}
 
@@ -44,6 +46,7 @@ _NULL_STRINGS = {"", "unknown", "not visible", "not shown", "n/a", "none", "null
 class VisionService(Protocol):
     def extract_label(self, image_bytes: bytes, content_type: str | None = None) -> ExtractedLabel:
         """Extract TTB label fields from one image."""
+        ...
 
 
 class VisionConfigurationError(RuntimeError):
@@ -143,7 +146,6 @@ class OpenAIVisionService:
                     }
                 ],
                 text={"format": _STRUCTURED_OUTPUT_FORMAT},
-                reasoning={"effort": "low"},
                 max_output_tokens=self._max_output_tokens,
                 store=False,
                 timeout=self._timeout_seconds,
@@ -178,9 +180,9 @@ class MockVisionService:
         self.label = label or ExtractedLabel(
             brand_name="Acme Reserve",
             class_type="Red Wine",
-            producer_name="Acme Winery, LLC",
+            producer="Acme Winery, LLC",
             country_of_origin="United States",
-            alcohol_by_volume="13.5%",
+            abv="13.5%",
             net_contents="750 mL",
             government_warning=(
                 "GOVERNMENT WARNING: (1) ACCORDING TO THE SURGEON GENERAL, WOMEN "
@@ -323,8 +325,6 @@ def _clean_field_value(field: str, value: Any) -> Any:
 
     if value.strip().lower() in _NULL_STRINGS:
         return None
-    if field == "government_warning":
-        return " ".join(value.split())
     return value.strip()
 
 
@@ -357,8 +357,8 @@ def _clamp_int(value: int, *, minimum: int, maximum: int) -> int:
 _EXTRACTION_INSTRUCTIONS = """
 You extract text from alcohol beverage labels for TTB label verification.
 
-Return exactly these seven fields and no others:
-brand_name, class_type, producer_name, country_of_origin, alcohol_by_volume, net_contents, government_warning.
+Return exactly these nine fields and no others:
+brand_name, class_type, producer, country_of_origin, abv, net_contents, government_warning, raw_text, extraction_confidence.
 
 Use null when a field is absent, unreadable, uncertain, cut off, blurred, angled, obscured by glare, or only inferable from context.
 Do not infer missing values from product category, common label conventions, geography, or prior knowledge.
@@ -369,7 +369,10 @@ For government_warning only:
 - Copy the warning exactly as visible in wording, case, spelling, punctuation, and numbering.
 - Do not correct OCR mistakes, normalize case, summarize, translate, or fill missing warning text.
 - If any part of the warning is unreadable or cut off, return null for government_warning.
-- Return the warning as one trimmed line with single spaces between visible words.
+- Preserve the warning's visible whitespace; do not collapse or otherwise normalize it.
+
+For raw_text, return a trimmed transcription of all visible label text, preserving its visible case and punctuation when possible; return null if no text is readable.
+For extraction_confidence, return a number from 0 to 1 representing confidence in the overall extraction; return null if it cannot be estimated.
 """.strip()
 
 
@@ -378,13 +381,15 @@ _EXTRACTED_LABEL_SCHEMA: dict[str, Any] = {
     "properties": {
         "brand_name": {"anyOf": [{"type": "string"}, {"type": "null"}]},
         "class_type": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-        "producer_name": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "producer": {"anyOf": [{"type": "string"}, {"type": "null"}]},
         "country_of_origin": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-        "alcohol_by_volume": {
+        "abv": {
             "anyOf": [{"type": "string"}, {"type": "number"}, {"type": "null"}]
         },
         "net_contents": {"anyOf": [{"type": "string"}, {"type": "null"}]},
         "government_warning": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "raw_text": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "extraction_confidence": {"anyOf": [{"type": "number", "minimum": 0, "maximum": 1}, {"type": "null"}]},
     },
     "required": list(_FIELDS),
     "additionalProperties": False,

@@ -53,7 +53,7 @@ def test_batch_happy_path_returns_summary_and_items() -> None:
     assert body["summary"]["needs_review"] == 0
     assert [item["client_id"] for item in body["items"]] == ["label-1", "label-2"]
     assert [item["filename"] for item in body["items"]] == ["front-1.png", "front-2.png"]
-    assert all(item["verdict"] == "PASS" for item in body["items"])
+    assert all(item["overall_verdict"] == "APPROVED" for item in body["items"])
     assert all(item["error"] is None for item in body["items"])
     assert len(service.calls) == 2
 
@@ -84,8 +84,8 @@ def test_batch_mixed_verdicts_return_correct_summary_counts() -> None:
     assert body["summary"]["total"] == 2
     assert body["summary"]["passed"] == 1
     assert body["summary"]["needs_review"] == 1
-    assert [item["verdict"] for item in body["items"]] == ["PASS", "NEEDS_REVIEW"]
-    assert body["items"][1]["fields"]
+    assert [item["overall_verdict"] for item in body["items"]] == ["APPROVED", "NEEDS_REVIEW"]
+    assert body["items"][1]["results"]
 
 
 def test_bad_label_in_batch_becomes_item_error_without_failing_batch() -> None:
@@ -109,11 +109,10 @@ def test_bad_label_in_batch_becomes_item_error_without_failing_batch() -> None:
         "passed": 1,
         "needs_review": 1,
         "total": 2,
-        "latency_ms": body["summary"]["latency_ms"],
     }
-    assert body["items"][0]["verdict"] == "PASS"
-    assert body["items"][1]["verdict"] == "NEEDS_REVIEW"
-    assert body["items"][1]["fields"] == []
+    assert body["items"][0]["overall_verdict"] == "APPROVED"
+    assert body["items"][1]["overall_verdict"] == "NEEDS_REVIEW"
+    assert body["items"][1]["results"] == []
     assert body["items"][1]["error"] == "Please upload a JPG, PNG, or WebP image for this label."
     assert service.calls == [(valid_image, "image/png")]
 
@@ -138,9 +137,9 @@ def test_one_vision_failure_does_not_fail_other_batch_items() -> None:
     body = response.json()
     assert body["summary"]["passed"] == 1
     assert body["summary"]["needs_review"] == 1
-    assert body["items"][0]["verdict"] == "PASS"
-    assert body["items"][1]["verdict"] == "NEEDS_REVIEW"
-    assert body["items"][1]["fields"] == []
+    assert body["items"][0]["overall_verdict"] == "APPROVED"
+    assert body["items"][1]["overall_verdict"] == "NEEDS_REVIEW"
+    assert body["items"][1]["results"] == []
     assert body["items"][1]["error"] == "Verification is temporarily unavailable for this label."
 
 
@@ -190,7 +189,7 @@ def test_batch_blank_required_field_becomes_item_error_without_calling_vision() 
     body = response.json()
     assert body["summary"]["passed"] == 0
     assert body["summary"]["needs_review"] == 1
-    assert body["items"][0]["verdict"] == "NEEDS_REVIEW"
+    assert body["items"][0]["overall_verdict"] == "NEEDS_REVIEW"
     assert body["items"][0]["error"] == "Please complete all required application fields: Government Warning."
     assert service.calls == []
 
@@ -251,9 +250,9 @@ def _application_item(client_id: str) -> dict[str, str]:
         "client_id": client_id,
         "brand_name": "Acme Reserve",
         "class_type": "Red Wine",
-        "producer_name": "Acme Winery, LLC",
+        "producer": "Acme Winery, LLC",
         "country_of_origin": "United States",
-        "alcohol_by_volume": "13.5%",
+        "abv": "13.5%",
         "net_contents": "750 mL",
         "government_warning": REQUIRED_WARNING,
     }
@@ -263,9 +262,9 @@ def _matching_label(**overrides: object) -> ExtractedLabel:
     data = {
         "brand_name": "Acme Reserve",
         "class_type": "Red Wine",
-        "producer_name": "Acme Winery, LLC",
+        "producer": "Acme Winery, LLC",
         "country_of_origin": "United States",
-        "alcohol_by_volume": "13.5%",
+        "abv": "13.5%",
         "net_contents": "750 mL",
         "government_warning": REQUIRED_WARNING,
     }

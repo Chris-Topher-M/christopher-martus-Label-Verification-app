@@ -21,7 +21,7 @@ from backend.app.verification.models import (
     BatchVerificationResponse,
     BatchVerificationSummary,
     ErrorResponse,
-    VerificationResponse,
+    VerificationResult,
     VerificationVerdict,
 )
 from backend.app.verification.vision import (
@@ -42,9 +42,9 @@ DEFAULT_BATCH_CONCURRENCY = 3
 APPLICATION_FIELD_NAMES = (
     "brand_name",
     "class_type",
-    "producer_name",
+    "producer",
     "country_of_origin",
-    "alcohol_by_volume",
+    "abv",
     "net_contents",
     "government_warning",
 )
@@ -54,9 +54,9 @@ FIELD_LABELS = {
     "items": "Batch Item Data",
     "brand_name": "Brand Name",
     "class_type": "Class / Type",
-    "producer_name": "Producer Name",
+    "producer": "Producer Name",
     "country_of_origin": "Country of Origin",
-    "alcohol_by_volume": "Alcohol by Volume",
+    "abv": "Alcohol by Volume",
     "net_contents": "Net Contents",
     "government_warning": "Government Warning",
 }
@@ -160,7 +160,7 @@ def health() -> dict[str, str]:
 
 @app.post(
     "/verify",
-    response_model=VerificationResponse,
+    response_model=VerificationResult,
     responses={
         400: {"model": ErrorResponse},
         413: {"model": ErrorResponse},
@@ -173,22 +173,22 @@ async def verify(
     image: Annotated[UploadFile, File()],
     brand_name: Annotated[str, Form()],
     class_type: Annotated[str, Form()],
-    producer_name: Annotated[str, Form()],
+    producer: Annotated[str, Form()],
     country_of_origin: Annotated[str, Form()],
-    alcohol_by_volume: Annotated[str, Form()],
+    abv: Annotated[str, Form()],
     net_contents: Annotated[str, Form()],
     government_warning: Annotated[str, Form()],
     vision_service_factory: Annotated[Callable[[], VisionService], Depends(get_vision_service)],
-) -> VerificationResponse:
+) -> VerificationResult:
     started_at = time.perf_counter()
 
     application = _build_application_data(
         {
             "brand_name": brand_name,
             "class_type": class_type,
-            "producer_name": producer_name,
+            "producer": producer,
             "country_of_origin": country_of_origin,
-            "alcohol_by_volume": alcohol_by_volume,
+            "abv": abv,
             "net_contents": net_contents,
             "government_warning": government_warning,
         }
@@ -205,8 +205,12 @@ async def verify(
         _raise_readable_error(413, "Please upload an image smaller than 10 MB.")
 
     try:
-        vision_service = vision_service_factory()
-        extracted = vision_service.extract_label(image_bytes, content_type)
+        extracted = await asyncio.to_thread(
+            _extract_batch_label,
+            vision_service_factory,
+            image_bytes,
+            content_type,
+        )
         result = verify_label(application, extracted)
     except ImagePreprocessingError:
         _raise_readable_error(400, "The uploaded file is not a readable image.")
@@ -218,7 +222,11 @@ async def verify(
         _raise_readable_error(500, "Verification is temporarily unavailable.")
 
     latency_ms = int((time.perf_counter() - started_at) * 1000)
-    return VerificationResponse(verdict=result.verdict, fields=result.fields, latency_ms=latency_ms)
+    return VerificationResult(
+        results=result.results,
+        overall_verdict=result.overall_verdict,
+        latency_ms=latency_ms,
+    )
 
 
 @app.post(
@@ -269,14 +277,13 @@ async def verify_batch(
             )
 
     latency_ms = int((time.perf_counter() - started_at) * 1000)
-    passed = sum(1 for item in response_items if item.verdict is VerificationVerdict.PASS)
+    passed = sum(1 for item in response_items if item.overall_verdict is VerificationVerdict.APPROVED)
     total = len(response_items)
     return BatchVerificationResponse(
         summary=BatchVerificationSummary(
             passed=passed,
             needs_review=total - passed,
             total=total,
-            latency_ms=latency_ms,
         ),
         items=response_items,
     )
@@ -406,8 +413,8 @@ async def _process_batch_item(
         return BatchVerificationItem(
             client_id=work_item.client_id,
             filename=work_item.filename,
-            verdict=result.verdict,
-            fields=result.fields,
+            overall_verdict=result.overall_verdict,
+            results=result.results,
             latency_ms=latency_ms,
             error=None,
         )
@@ -434,8 +441,8 @@ def _batch_error_item(work_item: BatchWorkItem, message: str) -> BatchVerificati
     return BatchVerificationItem(
         client_id=work_item.client_id,
         filename=work_item.filename,
-        verdict=VerificationVerdict.NEEDS_REVIEW,
-        fields=[],
+        overall_verdict=VerificationVerdict.NEEDS_REVIEW,
+        results=[],
         latency_ms=0,
         error=message,
     )

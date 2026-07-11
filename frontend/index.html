@@ -51,8 +51,8 @@
             </div>
 
             <div class="field">
-              <label for="producer_name">Producer Name</label>
-              <input id="producer_name" name="producer_name" type="text" autocomplete="off" required>
+              <label for="producer">Producer Name</label>
+              <input id="producer" name="producer" type="text" autocomplete="off" required>
             </div>
 
             <div class="field">
@@ -61,8 +61,8 @@
             </div>
 
             <div class="field">
-              <label for="alcohol_by_volume">Alcohol by Volume</label>
-              <input id="alcohol_by_volume" name="alcohol_by_volume" type="text" autocomplete="off" required>
+              <label for="abv">Alcohol by Volume</label>
+              <input id="abv" name="abv" type="text" autocomplete="off" required>
             </div>
 
             <div class="field">
@@ -81,6 +81,9 @@
           <button id="submit-button" class="primary-button" type="submit">Verify Label</button>
           <p id="loading-message" class="loading-message" role="status" aria-live="polite" hidden>
             Checking the label. This usually takes a few seconds.
+          </p>
+          <p id="cold-start-message" class="loading-message" role="status" aria-live="polite" hidden>
+            The service may be waking up. Your label is still being checked and may take up to a minute.
           </p>
         </form>
 
