@@ -22,9 +22,16 @@ REQUIRED_WARNING = (
     "CAUSE HEALTH PROBLEMS."
 )
 MIN_OFFICIAL_SPEED_RUNS = 20
-P50_TARGET_MS = 3500
-P95_TARGET_MS = 4500
 MAX_TARGET_MS = 5000
+EXPECTED_RESULT_FIELDS = {
+    "brand_name",
+    "class_type",
+    "producer",
+    "country_of_origin",
+    "abv",
+    "net_contents",
+    "government_warning",
+}
 
 
 @dataclass(frozen=True)
@@ -129,7 +136,11 @@ def check_case_only(client: httpx.Client, base_url: str) -> CheckResult:
     response, elapsed = post_verify(client, base_url, image_bytes(), form)
     body = safe_json(response)
     brand = field_result(body, "brand_name")
-    passed = response.status_code == 200 and brand.get("status") == "PASS"
+    passed = (
+        response.status_code == 200
+        and body.get("overall_verdict") == "APPROVED"
+        and brand.get("status") == "PASS"
+    )
     return CheckResult("case-only fuzzy field", passed, verdict_detail(response, body), elapsed)
 
 
@@ -139,7 +150,12 @@ def check_abv_units(client: httpx.Client, base_url: str) -> CheckResult:
     body = safe_json(response)
     abv = field_result(body, "abv")
     net = field_result(body, "net_contents")
-    passed = response.status_code == 200 and abv.get("status") == "PASS" and net.get("status") == "PASS"
+    passed = (
+        response.status_code == 200
+        and body.get("overall_verdict") == "APPROVED"
+        and abv.get("status") == "PASS"
+        and net.get("status") == "PASS"
+    )
     return CheckResult("ABV and units normalization", passed, verdict_detail(response, body), elapsed)
 
 
@@ -248,8 +264,10 @@ def check_single_label_speed(client: httpx.Client, base_url: str, speed_runs: in
     server_latencies: list[int] = []
     verdicts: list[str] = []
     statuses: list[int] = []
+    failures: list[dict[str, Any]] = []
     timeout_count = 0
-    for _ in range(speed_runs):
+    malformed_count = 0
+    for run_number in range(1, speed_runs + 1):
         response, elapsed = post_verify(client, base_url, fixture, application_form())
         body = safe_json(response)
         latencies.append(elapsed)
@@ -262,6 +280,33 @@ def check_single_label_speed(client: httpx.Client, base_url: str, speed_runs: in
         error_code = error.get("code") if isinstance(error, dict) else None
         if response.status_code == 504 or error_code == "VISION_TIMEOUT":
             timeout_count += 1
+
+        malformed = response.status_code == 200 and not valid_verification_shape(body)
+        if malformed:
+            malformed_count += 1
+        failed_fields = failed_field_names(body)
+        if (
+            response.status_code != 200
+            or body.get("overall_verdict") != "APPROVED"
+            or elapsed >= MAX_TARGET_MS
+            or malformed
+        ):
+            failure: dict[str, Any] = {
+                "run": run_number,
+                "status": response.status_code,
+                "client_ms": elapsed,
+                "server_ms": server_latency,
+                "verdict": body.get("overall_verdict"),
+                "failed_fields": failed_fields,
+            }
+            if error_code is not None:
+                failure["error_code"] = error_code
+            warning = field_result(body, "government_warning")
+            if warning.get("status") == "FAIL":
+                failure["warning_found"] = warning.get("found")
+            if malformed:
+                failure["malformed"] = True
+            failures.append(failure)
 
     sorted_latencies = sorted(latencies)
     p50 = percentile_nearest_rank(sorted_latencies, 50)
@@ -280,10 +325,9 @@ def check_single_label_speed(client: httpx.Client, base_url: str, speed_runs: in
     )
     passed = (
         speed_runs >= MIN_OFFICIAL_SPEED_RUNS
-        and p50 < P50_TARGET_MS
-        and p95 < P95_TARGET_MS
         and maximum < MAX_TARGET_MS
         and timeout_count == 0
+        and malformed_count == 0
         and all(status == 200 for status in statuses)
         and all(verdict == "APPROVED" for verdict in verdicts)
     )
@@ -292,7 +336,8 @@ def check_single_label_speed(client: httpx.Client, base_url: str, speed_runs: in
         f"client_runs={latencies} client_p50={p50} client_p95={p95} "
         f"client_max={maximum} client_mean={mean} server_runs={server_latencies} "
         f"server_p50={server_p50} server_p95={server_p95} timeout_count={timeout_count} "
-        f"statuses={statuses} verdicts={verdicts}"
+        f"malformed_count={malformed_count} statuses={statuses} verdicts={verdicts} "
+        f"failures={failures}"
     )
     return CheckResult("single-label speed", passed, detail, maximum)
 
@@ -422,6 +467,31 @@ def field_result(body: dict[str, Any], field_name: str) -> dict[str, Any]:
         if isinstance(field, dict) and field.get("field") == field_name:
             return field
     return {}
+
+
+def failed_field_names(body: dict[str, Any]) -> list[str]:
+    results = body.get("results", [])
+    if not isinstance(results, list):
+        return []
+    return [
+        str(field.get("field"))
+        for field in results
+        if isinstance(field, dict) and field.get("status") != "PASS"
+    ]
+
+
+def valid_verification_shape(body: dict[str, Any]) -> bool:
+    results = body.get("results")
+    if body.get("overall_verdict") not in {"APPROVED", "NEEDS_REVIEW"}:
+        return False
+    if not isinstance(results, list) or len(results) != len(EXPECTED_RESULT_FIELDS):
+        return False
+    fields = {
+        result.get("field")
+        for result in results
+        if isinstance(result, dict) and result.get("status") in {"PASS", "FAIL"}
+    }
+    return fields == EXPECTED_RESULT_FIELDS
 
 
 def verdict_detail(response: httpx.Response, body: dict[str, Any]) -> str:

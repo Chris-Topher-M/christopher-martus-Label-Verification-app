@@ -18,12 +18,12 @@ from backend.app.verification.models import ExtractedLabel
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_VISION_MODEL = "gpt-4.1-mini"
-DEFAULT_TIMEOUT_SECONDS = 4.0
-DEFAULT_DEADLINE_SECONDS = 4.5
+DEFAULT_VISION_MODEL = "gpt-5.4-nano-2026-03-17"
+DEFAULT_TIMEOUT_SECONDS = 4.5
+DEFAULT_DEADLINE_SECONDS = 4.7
 DEFAULT_MAX_LONG_EDGE_PIXELS = 768
 DEFAULT_JPEG_QUALITY = 80
-DEFAULT_IMAGE_DETAIL = "low"
+DEFAULT_IMAGE_DETAIL = "high"
 DEFAULT_MAX_OUTPUT_TOKENS = 500
 MIN_LONG_EDGE_PIXELS = 512
 MAX_LONG_EDGE_PIXELS = 2000
@@ -50,8 +50,6 @@ _PROVIDER_TO_FIELD = {
     "abv": "abv",
     "net": "net_contents",
     "warning": "government_warning",
-    "text": "raw_text",
-    "confidence": "extraction_confidence",
 }
 _PROVIDER_FIELDS = tuple(_PROVIDER_TO_FIELD)
 _NULL_STRINGS = {
@@ -530,6 +528,8 @@ def _validate_payload(payload: dict[str, Any]) -> ExtractedLabel:
             field: payload[provider_field]
             for provider_field, field in _PROVIDER_TO_FIELD.items()
         }
+        field_payload["raw_text"] = None
+        field_payload["extraction_confidence"] = None
     elif set(payload) == set(_FIELDS):
         field_payload = payload
     else:
@@ -581,10 +581,9 @@ def _clamp_int(value: int, *, minimum: int, maximum: int) -> int:
 _EXTRACTION_INSTRUCTIONS = """
 You extract text from alcohol beverage labels for TTB label verification.
 
-Return exactly these nine compact fields and no others:
+Return exactly these seven compact fields and no others:
 brand (brand name), type (class/type), producer, country (country of origin), abv,
-net (net contents), warning (government warning), text (raw visible text), and
-confidence (overall extraction confidence).
+net (net contents), and warning (government warning).
 
 Use null when a field is absent, unreadable, uncertain, cut off, blurred, angled, obscured by glare, or only inferable from context.
 Do not infer missing values from product category, common label conventions, geography, or prior knowledge.
@@ -597,8 +596,6 @@ For warning only:
 - If any part of the warning is unreadable or cut off, return null for warning.
 - Preserve the warning's visible whitespace; do not collapse or otherwise normalize it.
 
-For text, return a concise transcription of visible label text excluding the government warning, which is returned separately. Preserve visible case and punctuation when possible; return null if no non-warning text is readable.
-For confidence, return a number from 0 to 1 representing confidence in the overall extraction; return null if it cannot be estimated.
 """.strip()
 
 
@@ -612,10 +609,6 @@ _EXTRACTED_LABEL_SCHEMA: dict[str, Any] = {
         "abv": {"anyOf": [{"type": "string"}, {"type": "number"}, {"type": "null"}]},
         "net": {"anyOf": [{"type": "string"}, {"type": "null"}]},
         "warning": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-        "text": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-        "confidence": {
-            "anyOf": [{"type": "number", "minimum": 0, "maximum": 1}, {"type": "null"}]
-        },
     },
     "required": list(_PROVIDER_FIELDS),
     "additionalProperties": False,

@@ -28,6 +28,7 @@ from backend.app.verification.models import (
     VerificationVerdict,
 )
 from backend.app.verification.vision import (
+    DEFAULT_VISION_MODEL,
     ImagePreprocessingError,
     OpenAIVisionService,
     VisionAuthenticationError,
@@ -93,7 +94,10 @@ async def lifespan(application: FastAPI):
     except (VisionConfigurationError, VisionServiceError):
         logger.exception("Vision readiness check failed.")
         raise
-    logger.info("Vision readiness check passed: model=%s", os.environ.get("VISION_MODEL", "gpt-4.1-mini"))
+    logger.info(
+        "Vision readiness check passed: model=%s",
+        os.environ.get("VISION_MODEL", DEFAULT_VISION_MODEL),
+    )
     yield
 
 

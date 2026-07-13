@@ -53,12 +53,12 @@ If `uv` is unavailable but dependencies are already installed in `.venv`, use th
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
 | `OPENAI_API_KEY` | Yes | None | API key used by `OpenAIVisionService.from_env()` for OpenAI Responses API calls. |
-| `VISION_MODEL` | No | `gpt-4.1-mini` | Vision-capable model name used for label extraction and verified during startup. |
-| `VISION_TIMEOUT_SECONDS` | No | `4.0` | Timeout applied to OpenAI client creation and per-request vision calls. |
-| `VISION_DEADLINE_SECONDS` | No | `4.5` | Absolute per-label deadline, including preprocessing, model request, and parsing. |
+| `VISION_MODEL` | No | `gpt-5.4-nano-2026-03-17` | Vision-capable model name used for label extraction and verified during startup. The environment variable remains authoritative. |
+| `VISION_TIMEOUT_SECONDS` | No | `4.5` | Timeout applied to OpenAI client creation and per-request vision calls. |
+| `VISION_DEADLINE_SECONDS` | No | `4.7` | Absolute per-label deadline, including preprocessing, model request, and parsing. |
 | `VISION_MAX_LONG_EDGE_PIXELS` | No | `768` | Maximum long edge used when resizing label images before upload. Accepted range is 512 to 2000; 512 is the latency candidate and 768 is the fidelity baseline. |
 | `VISION_JPEG_QUALITY` | No | `80` | JPEG quality used when re-encoding uploaded label images. Keep at 80 while evaluating image-size and model changes. |
-| `VISION_IMAGE_DETAIL` | No | `low` | OpenAI image detail hint for the vision request. Accepted values are `low`, `high`, and `auto`; invalid values fall back to `low`. |
+| `VISION_IMAGE_DETAIL` | No | `high` | OpenAI image detail hint for the vision request. Accepted values are `low`, `high`, and `auto`; invalid values fall back to `high`. |
 | `VISION_MAX_OUTPUT_TOKENS` | No | `500` | Maximum response tokens allowed for structured extraction output. |
 | `BATCH_CONCURRENCY` | No | `3` | Maximum number of label verifications processed concurrently in `POST /verify/batch`, clamped to the range `1` to `10`. |
 
@@ -97,7 +97,7 @@ Set required and optional environment variables in the hosting provider. Do not 
 
 ## Vision readiness and errors
 
-The service creates one asynchronous OpenAI client at startup and validates `gpt-4.1-mini` with the Models API before it accepts traffic. Each label has a 4.5-second end-to-end deadline and no automatic provider retries. Provider failures return a safe error `code` in addition to a readable message: `VISION_CONFIGURATION_ERROR`, `VISION_AUTHENTICATION_FAILED`, `VISION_MODEL_UNAVAILABLE`, `VISION_RATE_LIMITED`, `VISION_TIMEOUT`, `VISION_MALFORMED_RESPONSE`, or `VISION_UNAVAILABLE`. Provider details, tracebacks, and secret values are never returned to the browser.
+The service creates one asynchronous OpenAI client at startup and validates the model selected by `VISION_MODEL` with the Models API before it accepts traffic. The fallback is the pinned `gpt-5.4-nano-2026-03-17` snapshot. Each label has a 4.7-second end-to-end deadline and no automatic provider retries. Provider failures return a safe error `code` in addition to a readable message: `VISION_CONFIGURATION_ERROR`, `VISION_AUTHENTICATION_FAILED`, `VISION_MODEL_UNAVAILABLE`, `VISION_RATE_LIMITED`, `VISION_TIMEOUT`, `VISION_MALFORMED_RESPONSE`, or `VISION_UNAVAILABLE`. Provider details, tracebacks, and secret values are never returned to the browser.
 
 Vision logs contain only safe performance metadata: source and encoded byte counts, image dimensions, stage timings, output-token usage, model, detail level, and timeout source. They do not contain uploaded images, extracted label text, form contents, or API keys. Verification responses also include a standard `Server-Timing: app;dur=<milliseconds>` header so client and application latency can be compared, including for error responses.
 
@@ -126,7 +126,7 @@ Technical approach:
 - Python 3.12
 - FastAPI
 - Plain HTML/CSS/JavaScript frontend
-- OpenAI Responses API for vision extraction with `gpt-4.1-mini` as the measured baseline
+- OpenAI Responses API for vision extraction with an environment-selected model and a pinned `gpt-5.4-nano-2026-03-17` fallback
 - Model access is verified by the deployment startup check
 - Pillow for image preprocessing
 - Pytest for automated tests
@@ -284,14 +284,9 @@ For repeated latency experiments, skip the functional cases while retaining the 
 uv run python scripts/run_live_checklist.py https://ttb-label-verification-ozud.onrender.com --speed-only --speed-runs 20
 ```
 
-The command rejects fewer than 20 measured runs as insufficient for an official p95. It reports client and application timings, status codes, verdicts, and timeout count. Acceptance requires p50 below 3.5 seconds, p95 below 4.5 seconds, every measured request below 5 seconds, all verdicts `APPROVED`, and zero timeouts or 5xx responses.
+The command rejects fewer than 20 measured runs as insufficient for an official p95. It reports client and application p50/p95 timings, status codes, verdicts, malformed responses, timeout count, and per-run diagnostics for failures. Acceptance requires every measured client request below 5 seconds, a complete seven-field response, all verdicts `APPROVED`, and zero timeouts or non-200 responses.
 
-Evaluate deployment candidates one variable at a time:
-
-1. Baseline: `gpt-4.1-mini`, 768 px, JPEG quality 80, low detail.
-2. Image candidate: keep the baseline but use 512 px.
-3. On the best correct image size, compare `gpt-4.1-mini` with `gpt-4o-mini`.
-4. Keep only candidates that also pass the complete functional checklist. If p95 differs by less than 100 ms, prefer 768 px for text fidelity.
+Deploy with `VISION_MODEL=gpt-5.4-nano-2026-03-17`, 768 px, JPEG quality 80, high detail, a 4.5-second provider timeout, and a 4.7-second absolute deadline. Run the complete checklist twice, then run two independent 20-request speed-only checks. Accept the deployment only when all functional checks pass and all 40 measured warm requests return complete `APPROVED` results below five seconds. Measure Render cold starts separately.
 
 After collecting Render's `output_tokens` telemetry for correct responses, set `VISION_MAX_OUTPUT_TOKENS` to the next 50-token boundary above 125% of the largest observed value, clamped to 300 through 500. Do not lower the cap before collecting this measurement.
 

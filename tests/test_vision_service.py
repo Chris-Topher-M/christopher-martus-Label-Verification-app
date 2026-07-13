@@ -57,8 +57,6 @@ def _provider_payload(**overrides: object) -> dict[str, object]:
         "abv": "13.5%",
         "net": "750 mL",
         "warning": REQUIRED_WARNING,
-        "text": "Acme Reserve Red Wine",
-        "confidence": 0.95,
     }
     payload.update(overrides)
     return payload
@@ -161,15 +159,14 @@ def test_openai_service_uses_injected_client_and_compact_structured_output() -> 
         "abv",
         "net",
         "warning",
-        "text",
-        "confidence",
     }
     image_part = call["input"][0]["content"][1]
     assert image_part["type"] == "input_image"
     assert image_part["detail"] == "low"
     assert image_part["image_url"].startswith("data:image/jpeg;base64,")
     assert call["max_output_tokens"] == 350
-    assert "excluding the government warning" in call["instructions"]
+    assert "exactly these seven compact fields" in call["instructions"]
+    assert "raw visible text" not in call["instructions"]
 
 
 def test_openai_service_from_env_uses_tuning_environment(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -212,6 +209,8 @@ def test_compact_provider_payload_maps_to_public_extracted_label() -> None:
     assert label.country_of_origin == "United States"
     assert label.net_contents == "750 mL"
     assert label.government_warning == REQUIRED_WARNING
+    assert label.raw_text is None
+    assert label.extraction_confidence is None
 
 
 def test_government_warning_preserves_visible_whitespace() -> None:
@@ -225,7 +224,7 @@ def test_government_warning_preserves_visible_whitespace() -> None:
     assert label.government_warning == f"  {warning_with_line_break}  ".strip()
 
 
-def test_extraction_metadata_is_parsed() -> None:
+def test_legacy_public_payload_still_parses_extraction_metadata() -> None:
     label = parse_extracted_label_response(SimpleNamespace(output_text=json.dumps(_label_payload())))
 
     assert label.raw_text == "Acme Reserve Red Wine"
