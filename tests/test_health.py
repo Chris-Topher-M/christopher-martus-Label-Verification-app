@@ -50,9 +50,7 @@ def test_frontend_script_posts_to_verify_and_uses_readable_result_labels() -> No
     assert "NEEDS REVIEW" in script
     assert "Exact match required, including capital letters and punctuation." in script
     assert "Could not read this on the label." in script
-    assert "new FormData(form)" in script
     assert "COLD_START_DELAY_MS" in script
-    assert script.index("const formData = new FormData(form)") < script.index("setSingleBusy(true)")
 
 
 def test_frontend_has_accessible_status_error_and_result_regions() -> None:

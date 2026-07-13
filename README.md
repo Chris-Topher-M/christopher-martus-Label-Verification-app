@@ -279,6 +279,12 @@ Run automated tests:
 uv run pytest
 ```
 
+The browser regression test uses Chromium. Install it once after syncing dependencies:
+
+```powershell
+uv run playwright install chromium
+```
+
 Fallback:
 
 ```powershell
