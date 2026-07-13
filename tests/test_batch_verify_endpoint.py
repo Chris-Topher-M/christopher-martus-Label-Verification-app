@@ -48,6 +48,7 @@ def test_batch_happy_path_returns_summary_and_items() -> None:
     )
 
     assert response.status_code == 200
+    assert response.headers["server-timing"].startswith("app;dur=")
     body = response.json()
     assert body["summary"]["total"] == 2
     assert body["summary"]["passed"] == 2

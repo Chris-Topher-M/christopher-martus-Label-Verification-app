@@ -48,6 +48,22 @@ def _label_payload(**overrides: object) -> dict[str, object]:
     return payload
 
 
+def _provider_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "brand": "Acme Reserve",
+        "type": "Red Wine",
+        "producer": "Acme Winery, LLC",
+        "country": "United States",
+        "abv": "13.5%",
+        "net": "750 mL",
+        "warning": REQUIRED_WARNING,
+        "text": "Acme Reserve Red Wine",
+        "confidence": 0.95,
+    }
+    payload.update(overrides)
+    return payload
+
+
 def _image_bytes(size: tuple[int, int] = (100, 80), mode: str = "RGB") -> bytes:
     image = Image.new(mode, size, (120, 30, 60))
     output = BytesIO()
@@ -84,13 +100,39 @@ def test_preprocess_honors_configured_size_and_quality_bounds() -> None:
     )
 
 
+def test_preprocess_allows_512_pixel_candidate_and_preserves_aspect_ratio() -> None:
+    result = preprocess_image(
+        _image_bytes(size=(3200, 1200)),
+        "image/png",
+        max_long_edge_pixels=512,
+        jpeg_quality=80,
+    )
+
+    assert (result.width, result.height) == (512, 192)
+    with Image.open(BytesIO(result.image_bytes)) as encoded:
+        assert encoded.mode == "RGB"
+        assert encoded.size == (512, 192)
+
+
+def test_preprocess_flattens_transparency_to_white_rgb_jpeg() -> None:
+    image = Image.new("RGBA", (40, 20), (0, 0, 0, 0))
+    output = BytesIO()
+    image.save(output, format="PNG")
+
+    result = preprocess_image(output.getvalue(), "image/png")
+
+    with Image.open(BytesIO(result.image_bytes)) as encoded:
+        assert encoded.mode == "RGB"
+        assert encoded.getpixel((0, 0)) == (255, 255, 255)
+
+
 def test_preprocess_rejects_corrupt_bytes_cleanly() -> None:
     with pytest.raises(ImagePreprocessingError):
         preprocess_image(b"not an image", "image/png")
 
 
-def test_openai_service_uses_injected_client_and_structured_output() -> None:
-    client = _FakeClient(_label_payload())
+def test_openai_service_uses_injected_client_and_compact_structured_output() -> None:
+    client = _FakeClient(_provider_payload())
     service = OpenAIVisionService(
         client=client,
         model="test-model",
@@ -111,6 +153,17 @@ def test_openai_service_uses_injected_client_and_structured_output() -> None:
     assert call["timeout"] == 3.5
     assert call["text"]["format"]["strict"] is True
     assert call["text"]["format"]["schema"]["additionalProperties"] is False
+    assert set(call["text"]["format"]["schema"]["properties"]) == {
+        "brand",
+        "type",
+        "producer",
+        "country",
+        "abv",
+        "net",
+        "warning",
+        "text",
+        "confidence",
+    }
     image_part = call["input"][0]["content"][1]
     assert image_part["type"] == "input_image"
     assert image_part["detail"] == "low"
@@ -147,6 +200,18 @@ def test_unknown_placeholder_values_become_none() -> None:
     label = parse_extracted_label_response(response)
 
     assert label.brand_name is None
+
+
+def test_compact_provider_payload_maps_to_public_extracted_label() -> None:
+    response = SimpleNamespace(output_text=json.dumps(_provider_payload()))
+
+    label = parse_extracted_label_response(response)
+
+    assert label.brand_name == "Acme Reserve"
+    assert label.class_type == "Red Wine"
+    assert label.country_of_origin == "United States"
+    assert label.net_contents == "750 mL"
+    assert label.government_warning == REQUIRED_WARNING
 
 
 def test_government_warning_preserves_visible_whitespace() -> None:
@@ -219,7 +284,10 @@ class _FakeResponses:
 
     async def create(self, **kwargs: object) -> SimpleNamespace:
         self.calls.append(kwargs)
-        return SimpleNamespace(output_text=json.dumps(self.payload))
+        return SimpleNamespace(
+            output_text=json.dumps(self.payload),
+            usage=SimpleNamespace(output_tokens=187),
+        )
 
 
 class _FakeClient:
@@ -234,6 +302,36 @@ class _FailingResponses:
 
 class _FailingClient:
     responses = _FailingResponses()
+
+
+def test_success_telemetry_contains_safe_sizes_timings_and_output_tokens(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    service = OpenAIVisionService(client=_FakeClient(_provider_payload()), model="safe-model")
+
+    with caplog.at_level("INFO"):
+        _run_async(service.extract_label(_image_bytes(), "image/png"))
+
+    assert "source_bytes=" in caplog.text
+    assert "encoded_bytes=" in caplog.text
+    assert "preprocessing_ms=" in caplog.text
+    assert "api_ms=" in caplog.text
+    assert "parse_ms=" in caplog.text
+    assert "output_tokens=187" in caplog.text
+    assert "model=safe-model" in caplog.text
+    assert REQUIRED_WARNING not in caplog.text
+
+
+def test_failure_telemetry_does_not_log_exception_message(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    service = OpenAIVisionService(client=_FailingClient(), timeout_seconds=1)
+
+    with caplog.at_level("WARNING"), pytest.raises(VisionTimeoutError):
+        _run_async(service.extract_label(_image_bytes(), "image/png"))
+
+    assert "timeout_source=absolute_deadline" in caplog.text
+    assert "model timed out" not in caplog.text
 
 
 def test_service_deadline_cancels_a_slow_provider() -> None:

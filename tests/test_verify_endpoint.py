@@ -47,6 +47,7 @@ def test_verify_happy_path_returns_full_result_and_latency(caplog: pytest.LogCap
         )
 
     assert response.status_code == 200
+    assert response.headers["server-timing"].startswith("app;dur=")
     body = response.json()
     assert body["overall_verdict"] == "APPROVED"
     assert body["latency_ms"] >= 0
@@ -184,6 +185,7 @@ def test_unsupported_file_type_returns_415_without_calling_vision() -> None:
     )
 
     assert response.status_code == 415
+    assert response.headers["server-timing"].startswith("app;dur=")
     assert response.json()["error"]["message"] == "Please upload a JPG, PNG, or WebP image."
     assert service.calls == []
 

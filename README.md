@@ -53,12 +53,12 @@ If `uv` is unavailable but dependencies are already installed in `.venv`, use th
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
 | `OPENAI_API_KEY` | Yes | None | API key used by `OpenAIVisionService.from_env()` for OpenAI Responses API calls. |
-| `VISION_MODEL` | No | `gpt-4o-mini` | Vision-capable model name used for label extraction and verified during startup. |
+| `VISION_MODEL` | No | `gpt-4.1-mini` | Vision-capable model name used for label extraction and verified during startup. |
 | `VISION_TIMEOUT_SECONDS` | No | `4.0` | Timeout applied to OpenAI client creation and per-request vision calls. |
 | `VISION_DEADLINE_SECONDS` | No | `4.5` | Absolute per-label deadline, including preprocessing, model request, and parsing. |
-| `VISION_MAX_LONG_EDGE_PIXELS` | No | `768` | Maximum long edge used when resizing label images before upload to the vision model. |
-| `VISION_JPEG_QUALITY` | No | `70` | JPEG quality used when re-encoding uploaded label images for the vision request. |
-| `VISION_IMAGE_DETAIL` | No | `high` | OpenAI image detail hint for the vision request. Accepted values are `low`, `high`, and `auto`; invalid values fall back to `high`. |
+| `VISION_MAX_LONG_EDGE_PIXELS` | No | `768` | Maximum long edge used when resizing label images before upload. Accepted range is 512 to 2000; 512 is the latency candidate and 768 is the fidelity baseline. |
+| `VISION_JPEG_QUALITY` | No | `80` | JPEG quality used when re-encoding uploaded label images. Keep at 80 while evaluating image-size and model changes. |
+| `VISION_IMAGE_DETAIL` | No | `low` | OpenAI image detail hint for the vision request. Accepted values are `low`, `high`, and `auto`; invalid values fall back to `low`. |
 | `VISION_MAX_OUTPUT_TOKENS` | No | `500` | Maximum response tokens allowed for structured extraction output. |
 | `BATCH_CONCURRENCY` | No | `3` | Maximum number of label verifications processed concurrently in `POST /verify/batch`, clamped to the range `1` to `10`. |
 
@@ -97,7 +97,9 @@ Set required and optional environment variables in the hosting provider. Do not 
 
 ## Vision readiness and errors
 
-The service creates one asynchronous OpenAI client at startup and validates `gpt-4o-mini` with the Models API before it accepts traffic. Each label has a 4.5-second end-to-end deadline and no automatic provider retries. Provider failures return a safe error `code` in addition to a readable message: `VISION_CONFIGURATION_ERROR`, `VISION_AUTHENTICATION_FAILED`, `VISION_MODEL_UNAVAILABLE`, `VISION_RATE_LIMITED`, `VISION_TIMEOUT`, `VISION_MALFORMED_RESPONSE`, or `VISION_UNAVAILABLE`. Provider details, tracebacks, and secret values are never returned to the browser.
+The service creates one asynchronous OpenAI client at startup and validates `gpt-4.1-mini` with the Models API before it accepts traffic. Each label has a 4.5-second end-to-end deadline and no automatic provider retries. Provider failures return a safe error `code` in addition to a readable message: `VISION_CONFIGURATION_ERROR`, `VISION_AUTHENTICATION_FAILED`, `VISION_MODEL_UNAVAILABLE`, `VISION_RATE_LIMITED`, `VISION_TIMEOUT`, `VISION_MALFORMED_RESPONSE`, or `VISION_UNAVAILABLE`. Provider details, tracebacks, and secret values are never returned to the browser.
+
+Vision logs contain only safe performance metadata: source and encoded byte counts, image dimensions, stage timings, output-token usage, model, detail level, and timeout source. They do not contain uploaded images, extracted label text, form contents, or API keys. Verification responses also include a standard `Server-Timing: app;dur=<milliseconds>` header so client and application latency can be compared, including for error responses.
 
 ## Approach / AI Workflow
 
@@ -124,7 +126,7 @@ Technical approach:
 - Python 3.12
 - FastAPI
 - Plain HTML/CSS/JavaScript frontend
-- OpenAI Responses API for vision extraction with `gpt-4o-mini`
+- OpenAI Responses API for vision extraction with `gpt-4.1-mini` as the measured baseline
 - Model access is verified by the deployment startup check
 - Pillow for image preprocessing
 - Pytest for automated tests
@@ -270,13 +272,30 @@ ABV matches within ±0.1 percentage points (including proof values), and net con
 
 ## Deployed performance measurement
 
-Run the active-service measurement with 20 valid-label requests:
+First run the complete functional checklist. It includes one unmeasured warm-up and 20 measured valid-label requests by default:
 
 ```powershell
-uv run python scripts/run_live_checklist.py https://ttb-label-verification-ozud.onrender.com --speed-runs 20
+uv run python scripts/run_live_checklist.py https://ttb-label-verification-ozud.onrender.com
 ```
 
-Record the command output below after each production deployment. The script reports client-observed p50 and p95; acceptance requires p95 below 5 seconds. This is pending the repaired deployment and deliberately contains no fabricated results.
+For repeated latency experiments, skip the functional cases while retaining the health check, one unmeasured warm-up, and 20 measured requests:
+
+```powershell
+uv run python scripts/run_live_checklist.py https://ttb-label-verification-ozud.onrender.com --speed-only --speed-runs 20
+```
+
+The command rejects fewer than 20 measured runs as insufficient for an official p95. It reports client and application timings, status codes, verdicts, and timeout count. Acceptance requires p50 below 3.5 seconds, p95 below 4.5 seconds, every measured request below 5 seconds, all verdicts `APPROVED`, and zero timeouts or 5xx responses.
+
+Evaluate deployment candidates one variable at a time:
+
+1. Baseline: `gpt-4.1-mini`, 768 px, JPEG quality 80, low detail.
+2. Image candidate: keep the baseline but use 512 px.
+3. On the best correct image size, compare `gpt-4.1-mini` with `gpt-4o-mini`.
+4. Keep only candidates that also pass the complete functional checklist. If p95 differs by less than 100 ms, prefer 768 px for text fidelity.
+
+After collecting Render's `output_tokens` telemetry for correct responses, set `VISION_MAX_OUTPUT_TOKENS` to the next 50-token boundary above 125% of the largest observed value, clamped to 300 through 500. Do not lower the cap before collecting this measurement.
+
+Record results after each production deployment. The table remains pending until real measurements are collected; no values should be fabricated.
 
 | URL | Run count | p50 | p95 | Date |
 | --- | ---: | ---: | ---: | --- |
@@ -287,7 +306,7 @@ Record the command output below after each production deployment. The script rep
 - This is a proof of concept, not a legal compliance guarantee.
 - Accuracy depends on image quality and model extraction quality.
 - No review history is saved.
-- Free-tier hosting cold starts may affect response time.
+- Render free-tier cold starts are measured separately and are not part of the warm-service five-second acceptance test.
 - A label may need human review when fields are absent, unreadable, or mismatched.
 
 ## Verification Checklist

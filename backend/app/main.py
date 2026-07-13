@@ -93,7 +93,7 @@ async def lifespan(application: FastAPI):
     except (VisionConfigurationError, VisionServiceError):
         logger.exception("Vision readiness check failed.")
         raise
-    logger.info("Vision readiness check passed: model=%s", os.environ.get("VISION_MODEL", "gpt-4o-mini"))
+    logger.info("Vision readiness check passed: model=%s", os.environ.get("VISION_MODEL", "gpt-4.1-mini"))
     yield
 
 
@@ -139,6 +139,7 @@ async def log_verify_latency(request: Request, call_next: Any) -> Any:
     response = await call_next(request)
     if request.url.path in {"/verify", "/verify/batch"}:
         latency_ms = int((time.perf_counter() - started_at) * 1000)
+        response.headers["Server-Timing"] = f"app;dur={latency_ms}"
         if latency_ms > LATENCY_BUDGET_MS:
             logger.warning(
                 "POST %s exceeded latency budget: latency_ms=%s status_code=%s",

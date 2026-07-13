@@ -18,14 +18,14 @@ from backend.app.verification.models import ExtractedLabel
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_VISION_MODEL = "gpt-4o-mini"
+DEFAULT_VISION_MODEL = "gpt-4.1-mini"
 DEFAULT_TIMEOUT_SECONDS = 4.0
 DEFAULT_DEADLINE_SECONDS = 4.5
 DEFAULT_MAX_LONG_EDGE_PIXELS = 768
-DEFAULT_JPEG_QUALITY = 70
-DEFAULT_IMAGE_DETAIL = "high"
+DEFAULT_JPEG_QUALITY = 80
+DEFAULT_IMAGE_DETAIL = "low"
 DEFAULT_MAX_OUTPUT_TOKENS = 500
-MIN_LONG_EDGE_PIXELS = 768
+MIN_LONG_EDGE_PIXELS = 512
 MAX_LONG_EDGE_PIXELS = 2000
 MIN_JPEG_QUALITY = 55
 MAX_JPEG_QUALITY = 95
@@ -42,6 +42,18 @@ _FIELDS = (
     "raw_text",
     "extraction_confidence",
 )
+_PROVIDER_TO_FIELD = {
+    "brand": "brand_name",
+    "type": "class_type",
+    "producer": "producer",
+    "country": "country_of_origin",
+    "abv": "abv",
+    "net": "net_contents",
+    "warning": "government_warning",
+    "text": "raw_text",
+    "confidence": "extraction_confidence",
+}
+_PROVIDER_FIELDS = tuple(_PROVIDER_TO_FIELD)
 _NULL_STRINGS = {
     "",
     "unknown",
@@ -176,6 +188,10 @@ class OpenAIVisionService:
         preprocessing_ms = 0
         api_ms = 0
         parse_ms = 0
+        encoded_bytes = 0
+        width = 0
+        height = 0
+        output_tokens: int | None = None
         stage = "preprocessing"
         try:
             async with asyncio.timeout(self._deadline_seconds):
@@ -188,6 +204,9 @@ class OpenAIVisionService:
                     jpeg_quality=self._jpeg_quality,
                 )
                 preprocessing_ms = int((time.perf_counter() - preprocess_started_at) * 1000)
+                encoded_bytes = len(preprocessed.image_bytes)
+                width = preprocessed.width
+                height = preprocessed.height
 
                 stage = "provider"
                 api_started_at = time.perf_counter()
@@ -216,32 +235,80 @@ class OpenAIVisionService:
                     timeout=self._timeout_seconds,
                 )
                 api_ms = int((time.perf_counter() - api_started_at) * 1000)
+                output_tokens = _response_output_tokens(response)
 
                 stage = "parsing"
                 parse_started_at = time.perf_counter()
-                label = parse_extracted_label_response(response)
-                parse_ms = int((time.perf_counter() - parse_started_at) * 1000)
+                try:
+                    label = parse_extracted_label_response(response)
+                finally:
+                    parse_ms = int((time.perf_counter() - parse_started_at) * 1000)
         except TimeoutError as exc:
-            _log_extraction_failure(stage, preprocessing_ms, api_ms, started_at, self)
+            _log_extraction_failure(
+                stage,
+                preprocessing_ms,
+                api_ms,
+                started_at,
+                self,
+                source_bytes=len(image_bytes),
+                encoded_bytes=encoded_bytes,
+                width=width,
+                height=height,
+                parse_ms=parse_ms,
+                output_tokens=output_tokens,
+                timeout_source="absolute_deadline",
+            )
             raise VisionTimeoutError("The vision service exceeded its deadline.") from exc
         except (TypeError, ValueError, json.JSONDecodeError, ValidationError) as exc:
             logger.warning("Vision extraction returned invalid structured output: exception_type=%s", type(exc).__name__)
-            _log_extraction_failure(stage, preprocessing_ms, api_ms, started_at, self)
+            _log_extraction_failure(
+                stage,
+                preprocessing_ms,
+                api_ms,
+                started_at,
+                self,
+                source_bytes=len(image_bytes),
+                encoded_bytes=encoded_bytes,
+                width=width,
+                height=height,
+                parse_ms=parse_ms,
+                output_tokens=output_tokens,
+                timeout_source=None,
+            )
             raise VisionMalformedResponseError("The vision provider returned an unreadable result.") from exc
         except Exception as exc:
-            _log_extraction_failure(stage, preprocessing_ms, api_ms, started_at, self)
+            _log_extraction_failure(
+                stage,
+                preprocessing_ms,
+                api_ms,
+                started_at,
+                self,
+                source_bytes=len(image_bytes),
+                encoded_bytes=encoded_bytes,
+                width=width,
+                height=height,
+                parse_ms=parse_ms,
+                output_tokens=output_tokens,
+                timeout_source=(
+                    "provider" if type(exc).__name__ == "APITimeoutError" else None
+                ),
+            )
             raise _vision_service_error(exc) from exc
 
         total_ms = int((time.perf_counter() - started_at) * 1000)
         logger.info(
-            "Vision extraction completed: preprocessing_ms=%s api_ms=%s parse_ms=%s total_ms=%s "
-            "width=%s height=%s detail=%s model=%s",
+            "Vision extraction completed: source_bytes=%s encoded_bytes=%s width=%s height=%s "
+            "preprocessing_ms=%s api_ms=%s parse_ms=%s total_ms=%s output_tokens=%s "
+            "detail=%s model=%s",
+            len(image_bytes),
+            encoded_bytes,
+            preprocessed.width,
+            preprocessed.height,
             preprocessing_ms,
             api_ms,
             parse_ms,
             total_ms,
-            preprocessed.width,
-            preprocessed.height,
+            output_tokens,
             self._image_detail,
             self._model,
         )
@@ -261,13 +328,30 @@ def _log_extraction_failure(
     api_ms: int,
     started_at: float,
     service: OpenAIVisionService,
+    *,
+    source_bytes: int,
+    encoded_bytes: int,
+    width: int,
+    height: int,
+    parse_ms: int,
+    output_tokens: int | None,
+    timeout_source: str | None,
 ) -> None:
     logger.warning(
-        "Vision extraction failed: stage=%s preprocessing_ms=%s api_ms=%s total_ms=%s detail=%s model=%s",
+        "Vision extraction failed: stage=%s source_bytes=%s encoded_bytes=%s width=%s height=%s "
+        "preprocessing_ms=%s api_ms=%s parse_ms=%s total_ms=%s output_tokens=%s "
+        "timeout_source=%s detail=%s model=%s",
         stage,
+        source_bytes,
+        encoded_bytes,
+        width,
+        height,
         preprocessing_ms,
         api_ms,
+        parse_ms,
         int((time.perf_counter() - started_at) * 1000),
+        output_tokens,
+        timeout_source,
         service._image_detail,
         service._model,
     )
@@ -356,9 +440,7 @@ def parse_extracted_label_response(response: Any) -> ExtractedLabel:
 def _vision_service_error(exc: Exception) -> VisionServiceError:
     """Map provider exceptions without returning provider text to API callers."""
     name = type(exc).__name__
-    logger.warning(
-        "Vision provider request failed: exception_type=%s", name, exc_info=True
-    )
+    logger.warning("Vision provider request failed: exception_type=%s", name)
     if name in {"AuthenticationError", "PermissionDeniedError"}:
         return VisionAuthenticationError(
             "The vision service credentials were rejected."
@@ -434,11 +516,28 @@ def _get_value(source: Any, name: str) -> Any:
     return getattr(source, name, None)
 
 
+def _response_output_tokens(response: Any) -> int | None:
+    usage = _get_value(response, "usage")
+    output_tokens = _get_value(usage, "output_tokens")
+    if isinstance(output_tokens, int) and not isinstance(output_tokens, bool):
+        return output_tokens
+    return None
+
+
 def _validate_payload(payload: dict[str, Any]) -> ExtractedLabel:
-    if set(payload) != set(_FIELDS):
+    if set(payload) == set(_PROVIDER_FIELDS):
+        field_payload = {
+            field: payload[provider_field]
+            for provider_field, field in _PROVIDER_TO_FIELD.items()
+        }
+    elif set(payload) == set(_FIELDS):
+        field_payload = payload
+    else:
         raise ValueError("structured output keys did not match ExtractedLabel schema")
 
-    cleaned = {field: _clean_field_value(field, payload[field]) for field in _FIELDS}
+    cleaned = {
+        field: _clean_field_value(field, field_payload[field]) for field in _FIELDS
+    }
     return ExtractedLabel.model_validate(cleaned)
 
 
@@ -482,41 +581,43 @@ def _clamp_int(value: int, *, minimum: int, maximum: int) -> int:
 _EXTRACTION_INSTRUCTIONS = """
 You extract text from alcohol beverage labels for TTB label verification.
 
-Return exactly these nine fields and no others:
-brand_name, class_type, producer, country_of_origin, abv, net_contents, government_warning, raw_text, extraction_confidence.
+Return exactly these nine compact fields and no others:
+brand (brand name), type (class/type), producer, country (country of origin), abv,
+net (net contents), warning (government warning), text (raw visible text), and
+confidence (overall extraction confidence).
 
 Use null when a field is absent, unreadable, uncertain, cut off, blurred, angled, obscured by glare, or only inferable from context.
 Do not infer missing values from product category, common label conventions, geography, or prior knowledge.
 If the image is not an alcohol or beverage product label, or the requested fields are not visible, return null for every field.
 Return partial data when some fields are visible.
 
-For government_warning only:
+For warning only:
 - Copy the warning exactly as visible in wording, case, spelling, punctuation, and numbering.
 - Do not correct OCR mistakes, normalize case, summarize, translate, or fill missing warning text.
-- If any part of the warning is unreadable or cut off, return null for government_warning.
+- If any part of the warning is unreadable or cut off, return null for warning.
 - Preserve the warning's visible whitespace; do not collapse or otherwise normalize it.
 
-For raw_text, return a concise transcription of visible label text excluding the government warning, which is returned separately. Preserve visible case and punctuation when possible; return null if no non-warning text is readable.
-For extraction_confidence, return a number from 0 to 1 representing confidence in the overall extraction; return null if it cannot be estimated.
+For text, return a concise transcription of visible label text excluding the government warning, which is returned separately. Preserve visible case and punctuation when possible; return null if no non-warning text is readable.
+For confidence, return a number from 0 to 1 representing confidence in the overall extraction; return null if it cannot be estimated.
 """.strip()
 
 
 _EXTRACTED_LABEL_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "brand_name": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-        "class_type": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "brand": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "type": {"anyOf": [{"type": "string"}, {"type": "null"}]},
         "producer": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-        "country_of_origin": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "country": {"anyOf": [{"type": "string"}, {"type": "null"}]},
         "abv": {"anyOf": [{"type": "string"}, {"type": "number"}, {"type": "null"}]},
-        "net_contents": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-        "government_warning": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-        "raw_text": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-        "extraction_confidence": {
+        "net": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "warning": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "text": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "confidence": {
             "anyOf": [{"type": "number", "minimum": 0, "maximum": 1}, {"type": "null"}]
         },
     },
-    "required": list(_FIELDS),
+    "required": list(_PROVIDER_FIELDS),
     "additionalProperties": False,
 }
 

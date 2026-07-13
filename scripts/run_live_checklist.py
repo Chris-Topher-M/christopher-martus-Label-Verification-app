@@ -21,6 +21,10 @@ REQUIRED_WARNING = (
     "IMPAIRS YOUR ABILITY TO DRIVE A CAR OR OPERATE MACHINERY, AND MAY "
     "CAUSE HEALTH PROBLEMS."
 )
+MIN_OFFICIAL_SPEED_RUNS = 20
+P50_TARGET_MS = 3500
+P95_TARGET_MS = 4500
+MAX_TARGET_MS = 5000
 
 
 @dataclass(frozen=True)
@@ -34,12 +38,29 @@ class CheckResult:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run the Phase 6 checklist against a deployed URL.")
     parser.add_argument("base_url", help="Deployed base URL, for example https://example.onrender.com")
-    parser.add_argument("--speed-runs", type=int, default=5, help="Number of valid-label latency runs.")
+    parser.add_argument(
+        "--speed-runs",
+        type=int,
+        default=MIN_OFFICIAL_SPEED_RUNS,
+        help=f"Number of measured valid-label latency runs (minimum {MIN_OFFICIAL_SPEED_RUNS}).",
+    )
+    parser.add_argument(
+        "--speed-only",
+        action="store_true",
+        help="Run health, one unmeasured warm-up, and the measured speed check only.",
+    )
     args = parser.parse_args()
+    if args.speed_runs < MIN_OFFICIAL_SPEED_RUNS:
+        parser.error(
+            f"--speed-runs must be at least {MIN_OFFICIAL_SPEED_RUNS} for an official p95."
+        )
 
     base_url = args.base_url.rstrip("/")
     with httpx.Client(timeout=45) as client:
-        results = run_checklist(client, base_url, max(args.speed_runs, 1))
+        if args.speed_only:
+            results = run_speed_check(client, base_url, args.speed_runs)
+        else:
+            results = run_checklist(client, base_url, args.speed_runs)
 
     print(json.dumps([result.__dict__ for result in results], indent=2))
     failed = [result for result in results if not result.passed]
@@ -66,6 +87,15 @@ def run_checklist(client: httpx.Client, base_url: str, speed_runs: int) -> list[
     results.append(check_batch_summary(client, base_url))
     results.append(check_single_label_speed(client, base_url, speed_runs))
     return results
+
+
+def run_speed_check(
+    client: httpx.Client, base_url: str, speed_runs: int
+) -> list[CheckResult]:
+    return [
+        check_health(client, base_url),
+        check_single_label_speed(client, base_url, speed_runs),
+    ]
 
 
 def check_health(client: httpx.Client, base_url: str) -> CheckResult:
@@ -212,20 +242,58 @@ def check_batch_summary(client: httpx.Client, base_url: str) -> CheckResult:
 
 
 def check_single_label_speed(client: httpx.Client, base_url: str, speed_runs: int) -> CheckResult:
+    fixture = image_bytes()
+    warmup_response, _ = post_verify(client, base_url, fixture, application_form())
     latencies: list[int] = []
+    server_latencies: list[int] = []
     verdicts: list[str] = []
+    statuses: list[int] = []
+    timeout_count = 0
     for _ in range(speed_runs):
-        response, elapsed = post_verify(client, base_url, image_bytes(), application_form())
+        response, elapsed = post_verify(client, base_url, fixture, application_form())
+        body = safe_json(response)
         latencies.append(elapsed)
-        verdicts.append(str(safe_json(response).get("overall_verdict")))
+        server_latency = server_timing_ms(response)
+        if server_latency is not None:
+            server_latencies.append(server_latency)
+        statuses.append(response.status_code)
+        verdicts.append(str(body.get("overall_verdict")))
+        error = body.get("error", {})
+        error_code = error.get("code") if isinstance(error, dict) else None
+        if response.status_code == 504 or error_code == "VISION_TIMEOUT":
+            timeout_count += 1
 
     sorted_latencies = sorted(latencies)
     p50 = percentile_nearest_rank(sorted_latencies, 50)
     p95 = percentile_nearest_rank(sorted_latencies, 95)
     maximum = max(latencies)
     mean = round(statistics.mean(latencies), 1)
-    passed = maximum < 5000 and p95 < 5000 and all(verdict == "APPROVED" for verdict in verdicts)
-    detail = f"runs={latencies} p50={p50} p95={p95} max={maximum} mean={mean} verdicts={verdicts}"
+    server_p50 = (
+        percentile_nearest_rank(sorted(server_latencies), 50)
+        if server_latencies
+        else None
+    )
+    server_p95 = (
+        percentile_nearest_rank(sorted(server_latencies), 95)
+        if server_latencies
+        else None
+    )
+    passed = (
+        speed_runs >= MIN_OFFICIAL_SPEED_RUNS
+        and p50 < P50_TARGET_MS
+        and p95 < P95_TARGET_MS
+        and maximum < MAX_TARGET_MS
+        and timeout_count == 0
+        and all(status == 200 for status in statuses)
+        and all(verdict == "APPROVED" for verdict in verdicts)
+    )
+    detail = (
+        f"warmup_status={warmup_response.status_code} sample_count={speed_runs} "
+        f"client_runs={latencies} client_p50={p50} client_p95={p95} "
+        f"client_max={maximum} client_mean={mean} server_runs={server_latencies} "
+        f"server_p50={server_p50} server_p95={server_p95} timeout_count={timeout_count} "
+        f"statuses={statuses} verdicts={verdicts}"
+    )
     return CheckResult("single-label speed", passed, detail, maximum)
 
 
@@ -234,6 +302,22 @@ def percentile_nearest_rank(sorted_values: list[int], percentile: int) -> int:
         raise ValueError("Cannot calculate a percentile from no values.")
     rank = max(1, math.ceil(len(sorted_values) * percentile / 100))
     return sorted_values[rank - 1]
+
+
+def server_timing_ms(response: httpx.Response) -> int | None:
+    header = response.headers.get("server-timing", "")
+    for metric in header.split(","):
+        parts = [part.strip() for part in metric.split(";")]
+        if not parts or parts[0] != "app":
+            continue
+        for part in parts[1:]:
+            if not part.startswith("dur="):
+                continue
+            try:
+                return round(float(part.removeprefix("dur=")))
+            except ValueError:
+                return None
+    return None
 
 
 def post_verify(
