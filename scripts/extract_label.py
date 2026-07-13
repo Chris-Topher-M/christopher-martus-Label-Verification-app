@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import argparse
 import json
 from pathlib import Path
@@ -34,7 +35,7 @@ def main() -> int:
         return 2
 
     try:
-        label = service.extract_label(image_path.read_bytes(), _content_type_for(image_path))
+        label = asyncio.run(service.extract_label(image_path.read_bytes(), _content_type_for(image_path)))
     except ImagePreprocessingError as exc:
         print(str(exc), file=sys.stderr)
         return 2

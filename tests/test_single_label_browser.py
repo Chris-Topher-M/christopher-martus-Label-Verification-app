@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 from io import BytesIO
 import socket
@@ -30,11 +31,11 @@ class DelayedMockVisionService(MockVisionService):
         self.started = threading.Event()
         self.release = threading.Event()
 
-    def extract_label(self, image_bytes: bytes, content_type: str | None = None):  # type: ignore[no-untyped-def]
+    async def extract_label(self, image_bytes: bytes, content_type: str | None = None):  # type: ignore[no-untyped-def]
         self.started.set()
-        if not self.release.wait(timeout=5):
+        if not await asyncio.to_thread(self.release.wait, 5):
             raise TimeoutError("The browser test did not release the vision service.")
-        return super().extract_label(image_bytes, content_type)
+        return await super().extract_label(image_bytes, content_type)
 
 
 @pytest.fixture

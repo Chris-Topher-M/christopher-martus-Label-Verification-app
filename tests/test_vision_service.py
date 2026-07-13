@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 from io import BytesIO
 import json
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -55,15 +58,15 @@ def _image_bytes(size: tuple[int, int] = (100, 80), mode: str = "RGB") -> bytes:
 def test_preprocess_downscales_large_image_and_encodes_jpeg() -> None:
     result = preprocess_image(_image_bytes(size=(3200, 1200)), "image/png")
 
-    assert result.width == 1280
-    assert result.height == 480
+    assert result.width == 768
+    assert result.height == 288
     assert result.content_type == "image/jpeg"
     assert result.data_url.startswith("data:image/jpeg;base64,")
 
     with Image.open(BytesIO(result.image_bytes)) as encoded:
         assert encoded.format == "JPEG"
         assert encoded.mode == "RGB"
-        assert encoded.size == (1280, 480)
+        assert encoded.size == (768, 288)
 
 
 def test_preprocess_honors_configured_size_and_quality_bounds() -> None:
@@ -98,7 +101,7 @@ def test_openai_service_uses_injected_client_and_structured_output() -> None:
         max_output_tokens=350,
     )
 
-    label = service.extract_label(_image_bytes(), "image/png")
+    label = _run_async(service.extract_label(_image_bytes(), "image/png"))
 
     assert label.brand_name == "Acme Reserve"
     assert label.government_warning == REQUIRED_WARNING
@@ -113,12 +116,14 @@ def test_openai_service_uses_injected_client_and_structured_output() -> None:
     assert image_part["detail"] == "low"
     assert image_part["image_url"].startswith("data:image/jpeg;base64,")
     assert call["max_output_tokens"] == 350
+    assert "excluding the government warning" in call["instructions"]
 
 
 def test_openai_service_from_env_uses_tuning_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("VISION_MODEL", "test-model")
     monkeypatch.setenv("VISION_TIMEOUT_SECONDS", "3.25")
+    monkeypatch.setenv("VISION_DEADLINE_SECONDS", "4.25")
     monkeypatch.setenv("VISION_MAX_LONG_EDGE_PIXELS", "1024")
     monkeypatch.setenv("VISION_JPEG_QUALITY", "70")
     monkeypatch.setenv("VISION_IMAGE_DETAIL", "low")
@@ -128,6 +133,8 @@ def test_openai_service_from_env_uses_tuning_environment(monkeypatch: pytest.Mon
 
     assert service._model == "test-model"
     assert service._timeout_seconds == 3.25
+    assert service._deadline_seconds == 4.25
+    assert service._client.max_retries == 0
     assert service._max_long_edge_pixels == 1024
     assert service._jpeg_quality == 70
     assert service._image_detail == "low"
@@ -191,7 +198,7 @@ def test_api_timeout_raises_typed_error() -> None:
     service = OpenAIVisionService(client=_FailingClient(), timeout_seconds=1)
 
     with pytest.raises(VisionTimeoutError):
-        service.extract_label(_image_bytes(), "image/png")
+        _run_async(service.extract_label(_image_bytes(), "image/png"))
 
 
 def test_mock_vision_service_is_deterministic_and_records_calls() -> None:
@@ -199,7 +206,7 @@ def test_mock_vision_service_is_deterministic_and_records_calls() -> None:
     service = MockVisionService(expected)
     image_bytes = _image_bytes()
 
-    label = service.extract_label(image_bytes, "image/png")
+    label = _run_async(service.extract_label(image_bytes, "image/png"))
 
     assert label == expected
     assert service.calls == [(image_bytes, "image/png")]
@@ -210,7 +217,7 @@ class _FakeResponses:
         self.payload = payload
         self.calls: list[dict[str, object]] = []
 
-    def create(self, **kwargs: object) -> SimpleNamespace:
+    async def create(self, **kwargs: object) -> SimpleNamespace:
         self.calls.append(kwargs)
         return SimpleNamespace(output_text=json.dumps(self.payload))
 
@@ -221,9 +228,51 @@ class _FakeClient:
 
 
 class _FailingResponses:
-    def create(self, **kwargs: object) -> object:
+    async def create(self, **kwargs: object) -> object:
         raise TimeoutError("model timed out")
 
 
 class _FailingClient:
     responses = _FailingResponses()
+
+
+def test_service_deadline_cancels_a_slow_provider() -> None:
+    service = OpenAIVisionService(
+        client=_SlowClient(),
+        timeout_seconds=5,
+        deadline_seconds=0.01,
+    )
+
+    started_at = time.perf_counter()
+    with pytest.raises(VisionTimeoutError):
+        _run_async(service.extract_label(_image_bytes(), "image/png"))
+    assert time.perf_counter() - started_at < 0.5
+
+
+class _SlowResponses:
+    async def create(self, **kwargs: object) -> object:
+        await asyncio.sleep(1)
+        return SimpleNamespace(output_text=json.dumps(_label_payload()))
+
+
+class _SlowClient:
+    responses = _SlowResponses()
+
+
+def _run_async(coroutine: object) -> object:
+    """Run a coroutine even when a browser test has an event loop in this thread."""
+    result: list[object] = []
+    error: list[BaseException] = []
+
+    def runner() -> None:
+        try:
+            result.append(asyncio.run(coroutine))  # type: ignore[arg-type]
+        except BaseException as exc:
+            error.append(exc)
+
+    thread = threading.Thread(target=runner)
+    thread.start()
+    thread.join()
+    if error:
+        raise error[0]
+    return result[0]

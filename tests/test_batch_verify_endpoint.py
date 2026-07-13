@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 from io import BytesIO
 import json
@@ -294,9 +295,9 @@ class _MappingVisionService:
         self.calls: list[tuple[bytes, str | None]] = []
         self._lock = threading.Lock()
 
-    def extract_label(self, image_bytes: bytes, content_type: str | None = None) -> ExtractedLabel:
+    async def extract_label(self, image_bytes: bytes, content_type: str | None = None) -> ExtractedLabel:
         if self.delay_seconds:
-            time.sleep(self.delay_seconds)
+            await asyncio.sleep(self.delay_seconds)
 
         with self._lock:
             self.calls.append((image_bytes, content_type))

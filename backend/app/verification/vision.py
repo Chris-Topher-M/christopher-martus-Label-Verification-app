@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 from dataclasses import dataclass
 from io import BytesIO
@@ -19,10 +20,11 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_VISION_MODEL = "gpt-4o-mini"
 DEFAULT_TIMEOUT_SECONDS = 4.0
-DEFAULT_MAX_LONG_EDGE_PIXELS = 1280
-DEFAULT_JPEG_QUALITY = 80
+DEFAULT_DEADLINE_SECONDS = 4.5
+DEFAULT_MAX_LONG_EDGE_PIXELS = 768
+DEFAULT_JPEG_QUALITY = 70
 DEFAULT_IMAGE_DETAIL = "high"
-DEFAULT_MAX_OUTPUT_TOKENS = 420
+DEFAULT_MAX_OUTPUT_TOKENS = 500
 MIN_LONG_EDGE_PIXELS = 768
 MAX_LONG_EDGE_PIXELS = 2000
 MIN_JPEG_QUALITY = 55
@@ -53,7 +55,7 @@ _NULL_STRINGS = {
 
 
 class VisionService(Protocol):
-    def extract_label(
+    async def extract_label(
         self, image_bytes: bytes, content_type: str | None = None
     ) -> ExtractedLabel:
         """Extract TTB label fields from one image."""
@@ -108,6 +110,7 @@ class OpenAIVisionService:
         client: Any,
         model: str = DEFAULT_VISION_MODEL,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+        deadline_seconds: float = DEFAULT_DEADLINE_SECONDS,
         max_long_edge_pixels: int = DEFAULT_MAX_LONG_EDGE_PIXELS,
         jpeg_quality: int = DEFAULT_JPEG_QUALITY,
         image_detail: str = DEFAULT_IMAGE_DETAIL,
@@ -116,6 +119,7 @@ class OpenAIVisionService:
         self._client = client
         self._model = model
         self._timeout_seconds = timeout_seconds
+        self._deadline_seconds = max(deadline_seconds, 0.1)
         self._max_long_edge_pixels = _clamp_int(
             max_long_edge_pixels,
             minimum=MIN_LONG_EDGE_PIXELS,
@@ -141,17 +145,18 @@ class OpenAIVisionService:
                 "OPENAI_API_KEY is required for OpenAIVisionService."
             )
 
-        from openai import OpenAI
+        from openai import AsyncOpenAI
 
         timeout_seconds = _env_float("VISION_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS)
         return cls(
-            client=OpenAI(
+            client=AsyncOpenAI(
                 api_key=api_key,
                 timeout=timeout_seconds,
                 max_retries=0,
             ),
             model=os.environ.get("VISION_MODEL", DEFAULT_VISION_MODEL),
             timeout_seconds=timeout_seconds,
+            deadline_seconds=_env_float("VISION_DEADLINE_SECONDS", DEFAULT_DEADLINE_SECONDS),
             max_long_edge_pixels=_env_int(
                 "VISION_MAX_LONG_EDGE_PIXELS", DEFAULT_MAX_LONG_EDGE_PIXELS
             ),
@@ -164,70 +169,77 @@ class OpenAIVisionService:
             ),
         )
 
-    def extract_label(
+    async def extract_label(
         self, image_bytes: bytes, content_type: str | None = None
     ) -> ExtractedLabel:
         started_at = time.perf_counter()
-        preprocess_started_at = time.perf_counter()
-        preprocessed = preprocess_image(
-            image_bytes,
-            content_type,
-            max_long_edge_pixels=self._max_long_edge_pixels,
-            jpeg_quality=self._jpeg_quality,
-        )
-        preprocessing_ms = int((time.perf_counter() - preprocess_started_at) * 1000)
-
+        preprocessing_ms = 0
+        api_ms = 0
+        parse_ms = 0
+        stage = "preprocessing"
         try:
-            api_started_at = time.perf_counter()
-            response = self._client.responses.create(
-                model=self._model,
-                instructions=_EXTRACTION_INSTRUCTIONS,
-                input=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "input_text",
-                                "text": "Extract the TTB label fields from this image.",
-                            },
-                            {
-                                "type": "input_image",
-                                "image_url": preprocessed.data_url,
-                                "detail": self._image_detail,
-                            },
-                        ],
-                    }
-                ],
-                text={"format": _STRUCTURED_OUTPUT_FORMAT},
-                max_output_tokens=self._max_output_tokens,
-                store=False,
-                timeout=self._timeout_seconds,
-            )
-            api_ms = int((time.perf_counter() - api_started_at) * 1000)
+            async with asyncio.timeout(self._deadline_seconds):
+                preprocess_started_at = time.perf_counter()
+                preprocessed = await asyncio.to_thread(
+                    preprocess_image,
+                    image_bytes,
+                    content_type,
+                    max_long_edge_pixels=self._max_long_edge_pixels,
+                    jpeg_quality=self._jpeg_quality,
+                )
+                preprocessing_ms = int((time.perf_counter() - preprocess_started_at) * 1000)
+
+                stage = "provider"
+                api_started_at = time.perf_counter()
+                response = await self._client.responses.create(
+                    model=self._model,
+                    instructions=_EXTRACTION_INSTRUCTIONS,
+                    input=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "input_text",
+                                    "text": "Extract the TTB label fields from this image.",
+                                },
+                                {
+                                    "type": "input_image",
+                                    "image_url": preprocessed.data_url,
+                                    "detail": self._image_detail,
+                                },
+                            ],
+                        }
+                    ],
+                    text={"format": _STRUCTURED_OUTPUT_FORMAT},
+                    max_output_tokens=self._max_output_tokens,
+                    store=False,
+                    timeout=self._timeout_seconds,
+                )
+                api_ms = int((time.perf_counter() - api_started_at) * 1000)
+
+                stage = "parsing"
+                parse_started_at = time.perf_counter()
+                label = parse_extracted_label_response(response)
+                parse_ms = int((time.perf_counter() - parse_started_at) * 1000)
+        except TimeoutError as exc:
+            _log_extraction_failure(stage, preprocessing_ms, api_ms, started_at, self)
+            raise VisionTimeoutError("The vision service exceeded its deadline.") from exc
+        except (TypeError, ValueError, json.JSONDecodeError, ValidationError) as exc:
+            logger.warning("Vision extraction returned invalid structured output: exception_type=%s", type(exc).__name__)
+            _log_extraction_failure(stage, preprocessing_ms, api_ms, started_at, self)
+            raise VisionMalformedResponseError("The vision provider returned an unreadable result.") from exc
         except Exception as exc:
+            _log_extraction_failure(stage, preprocessing_ms, api_ms, started_at, self)
             raise _vision_service_error(exc) from exc
 
-        parse_started_at = time.perf_counter()
-        try:
-            label = parse_extracted_label_response(response)
-        except (TypeError, ValueError, json.JSONDecodeError, ValidationError) as exc:
-            logger.warning(
-                "Vision extraction returned invalid structured output: %s",
-                type(exc).__name__,
-            )
-            raise VisionMalformedResponseError(
-                "The vision provider returned an unreadable result."
-            ) from exc
-        parse_ms = int((time.perf_counter() - parse_started_at) * 1000)
         total_ms = int((time.perf_counter() - started_at) * 1000)
         logger.info(
             "Vision extraction completed: preprocessing_ms=%s api_ms=%s parse_ms=%s total_ms=%s "
-            "encoded_bytes=%s width=%s height=%s detail=%s model=%s",
+            "width=%s height=%s detail=%s model=%s",
             preprocessing_ms,
             api_ms,
             parse_ms,
             total_ms,
-            len(preprocessed.image_bytes),
             preprocessed.width,
             preprocessed.height,
             self._image_detail,
@@ -235,12 +247,30 @@ class OpenAIVisionService:
         )
         return label
 
-    def verify_configured_model(self) -> None:
+    async def verify_configured_model(self) -> None:
         """Verify that this key can access the configured model before serving traffic."""
         try:
-            self._client.models.retrieve(self._model)
+            await self._client.models.retrieve(self._model)
         except Exception as exc:
             raise _vision_service_error(exc) from exc
+
+
+def _log_extraction_failure(
+    stage: str,
+    preprocessing_ms: int,
+    api_ms: int,
+    started_at: float,
+    service: OpenAIVisionService,
+) -> None:
+    logger.warning(
+        "Vision extraction failed: stage=%s preprocessing_ms=%s api_ms=%s total_ms=%s detail=%s model=%s",
+        stage,
+        preprocessing_ms,
+        api_ms,
+        int((time.perf_counter() - started_at) * 1000),
+        service._image_detail,
+        service._model,
+    )
 
 
 class MockVisionService:
@@ -262,7 +292,7 @@ class MockVisionService:
         )
         self.calls: list[tuple[bytes, str | None]] = []
 
-    def extract_label(
+    async def extract_label(
         self, image_bytes: bytes, content_type: str | None = None
     ) -> ExtractedLabel:
         self.calls.append((image_bytes, content_type))
@@ -466,7 +496,7 @@ For government_warning only:
 - If any part of the warning is unreadable or cut off, return null for government_warning.
 - Preserve the warning's visible whitespace; do not collapse or otherwise normalize it.
 
-For raw_text, return a trimmed transcription of all visible label text, preserving its visible case and punctuation when possible; return null if no text is readable.
+For raw_text, return a concise transcription of visible label text excluding the government warning, which is returned separately. Preserve visible case and punctuation when possible; return null if no non-warning text is readable.
 For extraction_confidence, return a number from 0 to 1 representing confidence in the overall extraction; return null if it cannot be estimated.
 """.strip()
 

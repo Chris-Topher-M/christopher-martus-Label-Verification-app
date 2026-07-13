@@ -55,10 +55,11 @@ If `uv` is unavailable but dependencies are already installed in `.venv`, use th
 | `OPENAI_API_KEY` | Yes | None | API key used by `OpenAIVisionService.from_env()` for OpenAI Responses API calls. |
 | `VISION_MODEL` | No | `gpt-4o-mini` | Vision-capable model name used for label extraction and verified during startup. |
 | `VISION_TIMEOUT_SECONDS` | No | `4.0` | Timeout applied to OpenAI client creation and per-request vision calls. |
-| `VISION_MAX_LONG_EDGE_PIXELS` | No | `1280` | Maximum long edge used when resizing label images before upload to the vision model. |
-| `VISION_JPEG_QUALITY` | No | `80` | JPEG quality used when re-encoding uploaded label images for the vision request. |
+| `VISION_DEADLINE_SECONDS` | No | `4.5` | Absolute per-label deadline, including preprocessing, model request, and parsing. |
+| `VISION_MAX_LONG_EDGE_PIXELS` | No | `768` | Maximum long edge used when resizing label images before upload to the vision model. |
+| `VISION_JPEG_QUALITY` | No | `70` | JPEG quality used when re-encoding uploaded label images for the vision request. |
 | `VISION_IMAGE_DETAIL` | No | `high` | OpenAI image detail hint for the vision request. Accepted values are `low`, `high`, and `auto`; invalid values fall back to `high`. |
-| `VISION_MAX_OUTPUT_TOKENS` | No | `420` | Maximum response tokens allowed for structured extraction output. |
+| `VISION_MAX_OUTPUT_TOKENS` | No | `500` | Maximum response tokens allowed for structured extraction output. |
 | `BATCH_CONCURRENCY` | No | `3` | Maximum number of label verifications processed concurrently in `POST /verify/batch`, clamped to the range `1` to `10`. |
 
 Do not commit `.env`, `.env.*`, request logs, or any file containing real secret values.
@@ -96,7 +97,7 @@ Set required and optional environment variables in the hosting provider. Do not 
 
 ## Vision readiness and errors
 
-The service creates one OpenAI client at startup and validates `gpt-4o-mini` with the Models API before it accepts traffic. Provider failures return a safe error `code` in addition to a readable message: `VISION_CONFIGURATION_ERROR`, `VISION_AUTHENTICATION_FAILED`, `VISION_MODEL_UNAVAILABLE`, `VISION_RATE_LIMITED`, `VISION_TIMEOUT`, `VISION_MALFORMED_RESPONSE`, or `VISION_UNAVAILABLE`. Provider details, tracebacks, and secret values are never returned to the browser.
+The service creates one asynchronous OpenAI client at startup and validates `gpt-4o-mini` with the Models API before it accepts traffic. Each label has a 4.5-second end-to-end deadline and no automatic provider retries. Provider failures return a safe error `code` in addition to a readable message: `VISION_CONFIGURATION_ERROR`, `VISION_AUTHENTICATION_FAILED`, `VISION_MODEL_UNAVAILABLE`, `VISION_RATE_LIMITED`, `VISION_TIMEOUT`, `VISION_MALFORMED_RESPONSE`, or `VISION_UNAVAILABLE`. Provider details, tracebacks, and secret values are never returned to the browser.
 
 ## Approach / AI Workflow
 

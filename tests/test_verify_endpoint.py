@@ -114,8 +114,8 @@ def test_verify_passes_uploaded_bytes_and_content_type_to_vision_service() -> No
     assert service.calls == [(image_bytes, "image/webp")]
 
 
-def test_verify_runs_vision_extraction_outside_the_event_loop() -> None:
-    service = _NoEventLoopVisionService()
+def test_verify_runs_vision_extraction_in_the_event_loop() -> None:
+    service = _EventLoopVisionService()
     app.dependency_overrides[get_vision_service] = lambda: lambda: service
     client = TestClient(app)
 
@@ -126,7 +126,7 @@ def test_verify_runs_vision_extraction_outside_the_event_loop() -> None:
     )
 
     assert response.status_code == 200
-    assert service.called_without_running_loop is True
+    assert service.called_with_running_loop is True
 
 
 def test_missing_image_returns_readable_422() -> None:
@@ -312,12 +312,12 @@ def _image_bytes() -> bytes:
 
 
 class _PreprocessingFailureService:
-    def extract_label(self, image_bytes: bytes, content_type: str | None = None) -> ExtractedLabel:
+    async def extract_label(self, image_bytes: bytes, content_type: str | None = None) -> ExtractedLabel:
         raise ImagePreprocessingError("bad image")
 
 
 class _UnexpectedFailureService:
-    def extract_label(self, image_bytes: bytes, content_type: str | None = None) -> ExtractedLabel:
+    async def extract_label(self, image_bytes: bytes, content_type: str | None = None) -> ExtractedLabel:
         raise RuntimeError("secret failure details")
 
 
@@ -325,16 +325,15 @@ class _TypedFailureService:
     def __init__(self, error: Exception) -> None:
         self.error = error
 
-    def extract_label(self, image_bytes: bytes, content_type: str | None = None) -> ExtractedLabel:
+    async def extract_label(self, image_bytes: bytes, content_type: str | None = None) -> ExtractedLabel:
         raise self.error
 
 
-class _NoEventLoopVisionService:
+class _EventLoopVisionService:
     def __init__(self) -> None:
-        self.called_without_running_loop = False
+        self.called_with_running_loop = False
 
-    def extract_label(self, image_bytes: bytes, content_type: str | None = None) -> ExtractedLabel:
-        with pytest.raises(RuntimeError):
-            asyncio.get_running_loop()
-        self.called_without_running_loop = True
+    async def extract_label(self, image_bytes: bytes, content_type: str | None = None) -> ExtractedLabel:
+        asyncio.get_running_loop()
+        self.called_with_running_loop = True
         return MockVisionService().label

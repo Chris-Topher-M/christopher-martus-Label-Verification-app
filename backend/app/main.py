@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from functools import lru_cache
 import json
+import inspect
 import logging
 import os
 from pathlib import Path
@@ -84,7 +85,9 @@ async def lifespan(application: FastAPI):
         service = service_factory()
         readiness_check = getattr(service, "verify_configured_model", None)
         if callable(readiness_check):
-            await asyncio.to_thread(readiness_check)
+            readiness_result = readiness_check()
+            if inspect.isawaitable(readiness_result):
+                await readiness_result
         else:
             logger.info("Vision readiness check skipped for an injected test service.")
     except (VisionConfigurationError, VisionServiceError):
@@ -250,12 +253,7 @@ async def verify(
         _raise_readable_error(413, "Please upload an image smaller than 10 MB.")
 
     try:
-        extracted = await asyncio.to_thread(
-            _extract_batch_label,
-            vision_service_factory,
-            image_bytes,
-            content_type,
-        )
+        extracted = await _extract_batch_label(vision_service_factory, image_bytes, content_type)
         result = verify_label(application, extracted)
     except ImagePreprocessingError:
         _raise_readable_error(400, "The uploaded file is not a readable image.", code="INVALID_IMAGE")
@@ -450,8 +448,7 @@ async def _process_batch_item(
 
     try:
         async with semaphore:
-            extracted = await asyncio.to_thread(
-                _extract_batch_label,
+            extracted = await _extract_batch_label(
                 vision_service_factory,
                 work_item.image_bytes,
                 work_item.content_type,
@@ -480,13 +477,13 @@ async def _process_batch_item(
         )
 
 
-def _extract_batch_label(
+async def _extract_batch_label(
     vision_service_factory: Callable[[], VisionService],
     image_bytes: bytes,
     content_type: str | None,
 ) -> Any:
     vision_service = vision_service_factory()
-    return vision_service.extract_label(image_bytes, content_type)
+    return await vision_service.extract_label(image_bytes, content_type)
 
 
 def _vision_error_response(exc: Exception) -> tuple[int, str, str]:
