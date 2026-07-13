@@ -53,7 +53,7 @@ If `uv` is unavailable but dependencies are already installed in `.venv`, use th
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
 | `OPENAI_API_KEY` | Yes | None | API key used by `OpenAIVisionService.from_env()` for OpenAI Responses API calls. |
-| `VISION_MODEL` | No | `gpt-4o-mini` | Vision-capable model name used for label extraction. |
+| `VISION_MODEL` | No | `gpt-4o-mini` | Vision-capable model name used for label extraction and verified during startup. |
 | `VISION_TIMEOUT_SECONDS` | No | `4.0` | Timeout applied to OpenAI client creation and per-request vision calls. |
 | `VISION_MAX_LONG_EDGE_PIXELS` | No | `1280` | Maximum long edge used when resizing label images before upload to the vision model. |
 | `VISION_JPEG_QUALITY` | No | `80` | JPEG quality used when re-encoding uploaded label images for the vision request. |
@@ -92,7 +92,11 @@ The repository includes `render.yaml` for a Render free-tier web service.
 - Start command: `uv run uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT`
 - Health check path: `/health`
 
-Set required and optional environment variables in the hosting provider. Do not rely on local `.env` files in production.
+Set required and optional environment variables in the hosting provider. Do not rely on local `.env` files in production. The app will not become ready until `OPENAI_API_KEY` is accepted and the configured `VISION_MODEL` can be retrieved from OpenAI.
+
+## Vision readiness and errors
+
+The service creates one OpenAI client at startup and validates `gpt-4o-mini` with the Models API before it accepts traffic. Provider failures return a safe error `code` in addition to a readable message: `VISION_CONFIGURATION_ERROR`, `VISION_AUTHENTICATION_FAILED`, `VISION_MODEL_UNAVAILABLE`, `VISION_RATE_LIMITED`, `VISION_TIMEOUT`, `VISION_MALFORMED_RESPONSE`, or `VISION_UNAVAILABLE`. Provider details, tracebacks, and secret values are never returned to the browser.
 
 ## Approach / AI Workflow
 
@@ -119,8 +123,8 @@ Technical approach:
 - Python 3.12
 - FastAPI
 - Plain HTML/CSS/JavaScript frontend
-- OpenAI Responses API for vision extraction with `gpt-5.4-mini`
-- Verified against OpenAI's current model list on July 9, 2026
+- OpenAI Responses API for vision extraction with `gpt-4o-mini`
+- Model access is verified by the deployment startup check
 - Pillow for image preprocessing
 - Pytest for automated tests
 - Render deployment configuration
@@ -262,6 +266,20 @@ ABV matches within ±0.1 percentage points (including proof values), and net con
 - Network access to the vision API is available.
 - The deployed host has `OPENAI_API_KEY` set.
 - Performance depends on image size, preprocessing, hosting cold starts, and vision API latency.
+
+## Deployed performance measurement
+
+Run the active-service measurement with 20 valid-label requests:
+
+```powershell
+uv run python scripts/run_live_checklist.py https://ttb-label-verification-ozud.onrender.com --speed-runs 20
+```
+
+Record the command output below after each production deployment. The script reports client-observed p50 and p95; acceptance requires p95 below 5 seconds. This is pending the repaired deployment and deliberately contains no fabricated results.
+
+| URL | Run count | p50 | p95 | Date |
+| --- | ---: | ---: | ---: | --- |
+| `https://ttb-label-verification-ozud.onrender.com` | 20 | Pending | Pending | Pending deployment repair |
 
 ## Limitations
 

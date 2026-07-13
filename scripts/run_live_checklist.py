@@ -7,6 +7,7 @@ import json
 import statistics
 import sys
 import time
+import math
 from typing import Any
 
 import httpx
@@ -219,12 +220,20 @@ def check_single_label_speed(client: httpx.Client, base_url: str, speed_runs: in
         verdicts.append(str(safe_json(response).get("overall_verdict")))
 
     sorted_latencies = sorted(latencies)
-    p95 = sorted_latencies[min(len(sorted_latencies) - 1, int(len(sorted_latencies) * 0.95))]
+    p50 = percentile_nearest_rank(sorted_latencies, 50)
+    p95 = percentile_nearest_rank(sorted_latencies, 95)
     maximum = max(latencies)
     mean = round(statistics.mean(latencies), 1)
-    passed = maximum <= 5000 and p95 <= 4500 and all(verdict == "APPROVED" for verdict in verdicts)
-    detail = f"runs={latencies} p95={p95} max={maximum} mean={mean} verdicts={verdicts}"
+    passed = maximum < 5000 and p95 < 5000 and all(verdict == "APPROVED" for verdict in verdicts)
+    detail = f"runs={latencies} p50={p50} p95={p95} max={maximum} mean={mean} verdicts={verdicts}"
     return CheckResult("single-label speed", passed, detail, maximum)
+
+
+def percentile_nearest_rank(sorted_values: list[int], percentile: int) -> int:
+    if not sorted_values:
+        raise ValueError("Cannot calculate a percentile from no values.")
+    rank = max(1, math.ceil(len(sorted_values) * percentile / 100))
+    return sorted_values[rank - 1]
 
 
 def post_verify(

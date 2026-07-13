@@ -12,6 +12,8 @@ from backend.app.verification.vision import (
     ImagePreprocessingError,
     MockVisionService,
     OpenAIVisionService,
+    VisionMalformedResponseError,
+    VisionTimeoutError,
     all_null_label,
     parse_extracted_label_response,
     preprocess_image,
@@ -158,26 +160,23 @@ def test_extraction_metadata_is_parsed() -> None:
     assert label.extraction_confidence == 0.95
 
 
-def test_extra_structured_field_returns_all_null_label() -> None:
+def test_extra_structured_field_raises_malformed_response_error() -> None:
     payload = _label_payload(extra_field="not allowed")
 
-    label = parse_extracted_label_response(SimpleNamespace(output_text=json.dumps(payload)))
-
-    assert label == all_null_label()
-
-
-def test_malformed_json_returns_all_null_label() -> None:
-    label = parse_extracted_label_response(SimpleNamespace(output_text="{bad json"))
-
-    assert label == all_null_label()
+    with pytest.raises(ValueError):
+        parse_extracted_label_response(SimpleNamespace(output_text=json.dumps(payload)))
 
 
-def test_wrong_field_type_returns_all_null_label() -> None:
+def test_malformed_json_raises_malformed_response_error() -> None:
+    with pytest.raises(json.JSONDecodeError):
+        parse_extracted_label_response(SimpleNamespace(output_text="{bad json"))
+
+
+def test_wrong_field_type_raises_malformed_response_error() -> None:
     payload = _label_payload(brand_name=["Acme"])
 
-    label = parse_extracted_label_response(SimpleNamespace(output_text=json.dumps(payload)))
-
-    assert label == all_null_label()
+    with pytest.raises(Exception):
+        parse_extracted_label_response(SimpleNamespace(output_text=json.dumps(payload)))
 
 
 def test_all_null_structured_response_represents_non_label_or_unreadable_image() -> None:
@@ -188,12 +187,11 @@ def test_all_null_structured_response_represents_non_label_or_unreadable_image()
     assert label == all_null_label()
 
 
-def test_api_failure_returns_all_null_label() -> None:
+def test_api_timeout_raises_typed_error() -> None:
     service = OpenAIVisionService(client=_FailingClient(), timeout_seconds=1)
 
-    label = service.extract_label(_image_bytes(), "image/png")
-
-    assert label == all_null_label()
+    with pytest.raises(VisionTimeoutError):
+        service.extract_label(_image_bytes(), "image/png")
 
 
 def test_mock_vision_service_is_deterministic_and_records_calls() -> None:

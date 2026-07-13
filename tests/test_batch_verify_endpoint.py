@@ -140,7 +140,8 @@ def test_one_vision_failure_does_not_fail_other_batch_items() -> None:
     assert body["items"][0]["overall_verdict"] == "APPROVED"
     assert body["items"][1]["overall_verdict"] == "NEEDS_REVIEW"
     assert body["items"][1]["results"] == []
-    assert body["items"][1]["error"] == "Verification is temporarily unavailable for this label."
+    assert body["items"][1]["error"] == "We could not read this photo. Please try again."
+    assert body["items"][1]["error_code"] == "VISION_UNAVAILABLE"
 
 
 def test_batch_image_and_item_count_mismatch_returns_422() -> None:

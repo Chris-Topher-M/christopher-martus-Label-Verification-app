@@ -1,7 +1,6 @@
-# Environment files: never commit secrets or local env templates.
+# Environment files: never commit secrets. The placeholder-only .env.example is tracked.
 .env
-.env.*
-.env.example
+
 
 # Python
 .python-version

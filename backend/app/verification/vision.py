@@ -53,6 +53,30 @@ class VisionConfigurationError(RuntimeError):
     pass
 
 
+class VisionServiceError(RuntimeError):
+    code = "VISION_UNAVAILABLE"
+
+
+class VisionAuthenticationError(VisionServiceError):
+    code = "VISION_AUTHENTICATION_FAILED"
+
+
+class VisionModelUnavailableError(VisionServiceError):
+    code = "VISION_MODEL_UNAVAILABLE"
+
+
+class VisionRateLimitError(VisionServiceError):
+    code = "VISION_RATE_LIMITED"
+
+
+class VisionTimeoutError(VisionServiceError):
+    code = "VISION_TIMEOUT"
+
+
+class VisionMalformedResponseError(VisionServiceError):
+    code = "VISION_MALFORMED_RESPONSE"
+
+
 class ImagePreprocessingError(ValueError):
     pass
 
@@ -152,11 +176,14 @@ class OpenAIVisionService:
             )
             api_ms = int((time.perf_counter() - api_started_at) * 1000)
         except Exception as exc:
-            logger.warning("Vision extraction API call failed: %s", type(exc).__name__, exc_info=True)
-            return all_null_label()
+            raise _vision_service_error(exc) from exc
 
         parse_started_at = time.perf_counter()
-        label = parse_extracted_label_response(response)
+        try:
+            label = parse_extracted_label_response(response)
+        except (TypeError, ValueError, json.JSONDecodeError, ValidationError) as exc:
+            logger.warning("Vision extraction returned invalid structured output: %s", type(exc).__name__)
+            raise VisionMalformedResponseError("The vision provider returned an unreadable result.") from exc
         parse_ms = int((time.perf_counter() - parse_started_at) * 1000)
         total_ms = int((time.perf_counter() - started_at) * 1000)
         logger.info(
@@ -173,6 +200,13 @@ class OpenAIVisionService:
             self._model,
         )
         return label
+
+    def verify_configured_model(self) -> None:
+        """Verify that this key can access the configured model before serving traffic."""
+        try:
+            self._client.models.retrieve(self._model)
+        except Exception as exc:
+            raise _vision_service_error(exc) from exc
 
 
 class MockVisionService:
@@ -241,14 +275,25 @@ def preprocess_image(
 
 
 def parse_extracted_label_response(response: Any) -> ExtractedLabel:
-    try:
-        parsed = _extract_response_payload(response)
-        if parsed is None:
-            raise ValueError("response did not contain structured output")
-        return _validate_payload(parsed)
-    except (TypeError, ValueError, json.JSONDecodeError, ValidationError) as exc:
-        logger.warning("Vision extraction returned invalid structured output: %s", exc, exc_info=True)
-        return all_null_label()
+    parsed = _extract_response_payload(response)
+    if parsed is None:
+        raise ValueError("response did not contain structured output")
+    return _validate_payload(parsed)
+
+
+def _vision_service_error(exc: Exception) -> VisionServiceError:
+    """Map provider exceptions without returning provider text to API callers."""
+    name = type(exc).__name__
+    logger.warning("Vision provider request failed: exception_type=%s", name, exc_info=True)
+    if name in {"AuthenticationError", "PermissionDeniedError"}:
+        return VisionAuthenticationError("The vision service credentials were rejected.")
+    if name in {"NotFoundError", "BadRequestError"}:
+        return VisionModelUnavailableError("The configured vision model is unavailable.")
+    if name == "RateLimitError":
+        return VisionRateLimitError("The vision service is busy.")
+    if name in {"APITimeoutError", "TimeoutError"}:
+        return VisionTimeoutError("The vision service timed out.")
+    return VisionServiceError("The vision service is unavailable.")
 
 
 def _flatten_to_rgb(image: Image.Image) -> Image.Image:

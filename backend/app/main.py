@@ -1,5 +1,7 @@
 import asyncio
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from functools import lru_cache
 import json
 import logging
 import os
@@ -27,8 +29,14 @@ from backend.app.verification.models import (
 from backend.app.verification.vision import (
     ImagePreprocessingError,
     OpenAIVisionService,
+    VisionAuthenticationError,
     VisionConfigurationError,
+    VisionMalformedResponseError,
+    VisionModelUnavailableError,
+    VisionRateLimitError,
     VisionService,
+    VisionServiceError,
+    VisionTimeoutError,
 )
 
 
@@ -63,7 +71,30 @@ FIELD_LABELS = {
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="TTB Label Verification")
+@lru_cache(maxsize=1)
+def _cached_vision_service() -> OpenAIVisionService:
+    return OpenAIVisionService.from_env()
+
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    try:
+        factory_provider = application.dependency_overrides.get(get_vision_service, get_vision_service)
+        service_factory = factory_provider()
+        service = service_factory()
+        readiness_check = getattr(service, "verify_configured_model", None)
+        if callable(readiness_check):
+            await asyncio.to_thread(readiness_check)
+        else:
+            logger.info("Vision readiness check skipped for an injected test service.")
+    except (VisionConfigurationError, VisionServiceError):
+        logger.exception("Vision readiness check failed.")
+        raise
+    logger.info("Vision readiness check passed: model=%s", os.environ.get("VISION_MODEL", "gpt-4o-mini"))
+    yield
+
+
+app = FastAPI(title="TTB Label Verification", lifespan=lifespan)
 
 
 @dataclass(frozen=True)
@@ -77,15 +108,26 @@ class BatchWorkItem:
 
 
 def get_vision_service() -> Callable[[], VisionService]:
-    return OpenAIVisionService.from_env
+    return _cached_vision_service
 
 
-def _error_response(message: str, details: list[str] | None = None) -> dict[str, Any]:
-    return {"error": {"message": message, "details": details or []}}
+def _error_response(
+    message: str,
+    details: list[str] | None = None,
+    *,
+    code: str | None = None,
+) -> dict[str, Any]:
+    return {"error": {"message": message, "code": code, "details": details or []}}
 
 
-def _raise_readable_error(status_code: int, message: str, details: list[str] | None = None) -> None:
-    raise HTTPException(status_code=status_code, detail=_error_response(message, details))
+def _raise_readable_error(
+    status_code: int,
+    message: str,
+    details: list[str] | None = None,
+    *,
+    code: str | None = None,
+) -> None:
+    raise HTTPException(status_code=status_code, detail=_error_response(message, details, code=code))
 
 
 @app.middleware("http")
@@ -165,8 +207,11 @@ def health() -> dict[str, str]:
         400: {"model": ErrorResponse},
         413: {"model": ErrorResponse},
         415: {"model": ErrorResponse},
+        429: {"model": ErrorResponse},
         422: {"model": ErrorResponse},
-        500: {"model": ErrorResponse},
+        502: {"model": ErrorResponse},
+        503: {"model": ErrorResponse},
+        504: {"model": ErrorResponse},
     },
 )
 async def verify(
@@ -213,13 +258,13 @@ async def verify(
         )
         result = verify_label(application, extracted)
     except ImagePreprocessingError:
-        _raise_readable_error(400, "The uploaded file is not a readable image.")
-    except VisionConfigurationError:
-        logger.exception("Vision service is not configured.")
-        _raise_readable_error(500, "Verification is temporarily unavailable.")
+        _raise_readable_error(400, "The uploaded file is not a readable image.", code="INVALID_IMAGE")
+    except (VisionConfigurationError, VisionServiceError) as exc:
+        status_code, message, code = _vision_error_response(exc)
+        _raise_readable_error(status_code, message, code=code)
     except Exception:
         logger.exception("Unexpected /verify failure.")
-        _raise_readable_error(500, "Verification is temporarily unavailable.")
+        _raise_readable_error(502, "We could not read this photo. Please try again.", code="VISION_UNAVAILABLE")
 
     latency_ms = int((time.perf_counter() - started_at) * 1000)
     return VerificationResult(
@@ -236,7 +281,10 @@ async def verify(
         400: {"model": ErrorResponse},
         413: {"model": ErrorResponse},
         422: {"model": ErrorResponse},
-        500: {"model": ErrorResponse},
+        429: {"model": ErrorResponse},
+        502: {"model": ErrorResponse},
+        503: {"model": ErrorResponse},
+        504: {"model": ErrorResponse},
     },
 )
 async def verify_batch(
@@ -419,13 +467,17 @@ async def _process_batch_item(
             error=None,
         )
     except ImagePreprocessingError:
-        return _batch_error_item(work_item, "The uploaded file is not a readable image.")
-    except VisionConfigurationError:
-        logger.exception("Vision service is not configured for /verify/batch.")
-        return _batch_error_item(work_item, "Verification is temporarily unavailable for this label.")
+        return _batch_error_item(work_item, "The uploaded file is not a readable image.", error_code="INVALID_IMAGE")
+    except (VisionConfigurationError, VisionServiceError) as exc:
+        _, message, code = _vision_error_response(exc)
+        return _batch_error_item(work_item, message, error_code=code)
     except Exception:
         logger.exception("Unexpected /verify/batch item failure.")
-        return _batch_error_item(work_item, "Verification is temporarily unavailable for this label.")
+        return _batch_error_item(
+            work_item,
+            "We could not read this photo. Please try again.",
+            error_code="VISION_UNAVAILABLE",
+        )
 
 
 def _extract_batch_label(
@@ -437,7 +489,24 @@ def _extract_batch_label(
     return vision_service.extract_label(image_bytes, content_type)
 
 
-def _batch_error_item(work_item: BatchWorkItem, message: str) -> BatchVerificationItem:
+def _vision_error_response(exc: Exception) -> tuple[int, str, str]:
+    if isinstance(exc, VisionRateLimitError):
+        return 429, "The verification service is busy. Please try again shortly.", exc.code
+    if isinstance(exc, VisionTimeoutError):
+        return 504, "We could not read this photo in time. Please try again.", exc.code
+    if isinstance(exc, VisionMalformedResponseError):
+        return 502, "We could not read this photo. Please try again.", exc.code
+    if isinstance(exc, (VisionAuthenticationError, VisionConfigurationError, VisionModelUnavailableError)):
+        return 503, "Verification is temporarily unavailable.", getattr(exc, "code", "VISION_CONFIGURATION_ERROR")
+    return 502, "We could not read this photo. Please try again.", "VISION_UNAVAILABLE"
+
+
+def _batch_error_item(
+    work_item: BatchWorkItem,
+    message: str,
+    *,
+    error_code: str | None = None,
+) -> BatchVerificationItem:
     return BatchVerificationItem(
         client_id=work_item.client_id,
         filename=work_item.filename,
@@ -445,6 +514,7 @@ def _batch_error_item(work_item: BatchWorkItem, message: str) -> BatchVerificati
         results=[],
         latency_ms=0,
         error=message,
+        error_code=error_code,
     )
 
 

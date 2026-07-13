@@ -62,6 +62,7 @@ class BatchVerificationItem(BaseModel):
     results: list[FieldResult] = Field(default_factory=list)
     latency_ms: int
     error: str | None = None
+    error_code: str | None = None
 
 
 class BatchVerificationResponse(BaseModel):
@@ -71,6 +72,7 @@ class BatchVerificationResponse(BaseModel):
 
 class ErrorBody(BaseModel):
     message: str
+    code: str | None = None
     details: list[str] = Field(default_factory=list)
 
 

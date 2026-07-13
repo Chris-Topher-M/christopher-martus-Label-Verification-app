@@ -10,7 +10,12 @@ from PIL import Image
 
 from backend.app.main import app, get_vision_service
 from backend.app.verification.models import ExtractedLabel
-from backend.app.verification.vision import ImagePreprocessingError, MockVisionService
+from backend.app.verification.vision import (
+    ImagePreprocessingError,
+    MockVisionService,
+    VisionRateLimitError,
+    VisionTimeoutError,
+)
 
 
 REQUIRED_WARNING = (
@@ -229,7 +234,7 @@ def test_corrupt_image_returns_400_from_preprocessing_error() -> None:
     assert response.json()["error"]["message"] == "The uploaded file is not a readable image."
 
 
-def test_vision_service_exception_returns_safe_500() -> None:
+def test_vision_service_exception_returns_safe_provider_error() -> None:
     app.dependency_overrides[get_vision_service] = lambda: lambda: _UnexpectedFailureService()
     client = TestClient(app, raise_server_exceptions=False)
 
@@ -239,11 +244,34 @@ def test_vision_service_exception_returns_safe_500() -> None:
         files={"image": ("label.png", _image_bytes(), "image/png")},
     )
 
-    assert response.status_code == 500
+    assert response.status_code == 502
     body_text = response.text
-    assert response.json()["error"]["message"] == "Verification is temporarily unavailable."
+    assert response.json()["error"]["code"] == "VISION_UNAVAILABLE"
     assert "RuntimeError" not in body_text
     assert "traceback" not in body_text.lower()
+
+
+@pytest.mark.parametrize(
+    ("service", "status_code", "code"),
+    [
+        (VisionRateLimitError("busy"), 429, "VISION_RATE_LIMITED"),
+        (VisionTimeoutError("slow"), 504, "VISION_TIMEOUT"),
+    ],
+)
+def test_typed_vision_errors_return_safe_distinct_responses(
+    service: Exception, status_code: int, code: str
+) -> None:
+    app.dependency_overrides[get_vision_service] = lambda: lambda: _TypedFailureService(service)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.post(
+        "/verify",
+        data=_application_form(),
+        files={"image": ("label.png", _image_bytes(), "image/png")},
+    )
+
+    assert response.status_code == status_code
+    assert response.json()["error"]["code"] == code
 
 
 def test_all_null_extraction_returns_needs_review_not_500() -> None:
@@ -291,6 +319,14 @@ class _PreprocessingFailureService:
 class _UnexpectedFailureService:
     def extract_label(self, image_bytes: bytes, content_type: str | None = None) -> ExtractedLabel:
         raise RuntimeError("secret failure details")
+
+
+class _TypedFailureService:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def extract_label(self, image_bytes: bytes, content_type: str | None = None) -> ExtractedLabel:
+        raise self.error
 
 
 class _NoEventLoopVisionService:
