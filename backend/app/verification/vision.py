@@ -40,11 +40,22 @@ _FIELDS = (
     "raw_text",
     "extraction_confidence",
 )
-_NULL_STRINGS = {"", "unknown", "not visible", "not shown", "n/a", "none", "null", "unreadable"}
+_NULL_STRINGS = {
+    "",
+    "unknown",
+    "not visible",
+    "not shown",
+    "n/a",
+    "none",
+    "null",
+    "unreadable",
+}
 
 
 class VisionService(Protocol):
-    def extract_label(self, image_bytes: bytes, content_type: str | None = None) -> ExtractedLabel:
+    def extract_label(
+        self, image_bytes: bytes, content_type: str | None = None
+    ) -> ExtractedLabel:
         """Extract TTB label fields from one image."""
         ...
 
@@ -115,29 +126,47 @@ class OpenAIVisionService:
             minimum=MIN_JPEG_QUALITY,
             maximum=MAX_JPEG_QUALITY,
         )
-        self._image_detail = image_detail if image_detail in ALLOWED_IMAGE_DETAILS else DEFAULT_IMAGE_DETAIL
+        self._image_detail = (
+            image_detail
+            if image_detail in ALLOWED_IMAGE_DETAILS
+            else DEFAULT_IMAGE_DETAIL
+        )
         self._max_output_tokens = max(max_output_tokens, 200)
 
     @classmethod
     def from_env(cls) -> "OpenAIVisionService":
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
-            raise VisionConfigurationError("OPENAI_API_KEY is required for OpenAIVisionService.")
+            raise VisionConfigurationError(
+                "OPENAI_API_KEY is required for OpenAIVisionService."
+            )
 
         from openai import OpenAI
 
         timeout_seconds = _env_float("VISION_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS)
         return cls(
-            client=OpenAI(api_key=api_key, timeout=timeout_seconds),
+            client=OpenAI(
+                api_key=api_key,
+                timeout=timeout_seconds,
+                max_retries=0,
+            ),
             model=os.environ.get("VISION_MODEL", DEFAULT_VISION_MODEL),
             timeout_seconds=timeout_seconds,
-            max_long_edge_pixels=_env_int("VISION_MAX_LONG_EDGE_PIXELS", DEFAULT_MAX_LONG_EDGE_PIXELS),
+            max_long_edge_pixels=_env_int(
+                "VISION_MAX_LONG_EDGE_PIXELS", DEFAULT_MAX_LONG_EDGE_PIXELS
+            ),
             jpeg_quality=_env_int("VISION_JPEG_QUALITY", DEFAULT_JPEG_QUALITY),
-            image_detail=os.environ.get("VISION_IMAGE_DETAIL", DEFAULT_IMAGE_DETAIL).strip().lower(),
-            max_output_tokens=_env_int("VISION_MAX_OUTPUT_TOKENS", DEFAULT_MAX_OUTPUT_TOKENS),
+            image_detail=os.environ.get("VISION_IMAGE_DETAIL", DEFAULT_IMAGE_DETAIL)
+            .strip()
+            .lower(),
+            max_output_tokens=_env_int(
+                "VISION_MAX_OUTPUT_TOKENS", DEFAULT_MAX_OUTPUT_TOKENS
+            ),
         )
 
-    def extract_label(self, image_bytes: bytes, content_type: str | None = None) -> ExtractedLabel:
+    def extract_label(
+        self, image_bytes: bytes, content_type: str | None = None
+    ) -> ExtractedLabel:
         started_at = time.perf_counter()
         preprocess_started_at = time.perf_counter()
         preprocessed = preprocess_image(
@@ -182,8 +211,13 @@ class OpenAIVisionService:
         try:
             label = parse_extracted_label_response(response)
         except (TypeError, ValueError, json.JSONDecodeError, ValidationError) as exc:
-            logger.warning("Vision extraction returned invalid structured output: %s", type(exc).__name__)
-            raise VisionMalformedResponseError("The vision provider returned an unreadable result.") from exc
+            logger.warning(
+                "Vision extraction returned invalid structured output: %s",
+                type(exc).__name__,
+            )
+            raise VisionMalformedResponseError(
+                "The vision provider returned an unreadable result."
+            ) from exc
         parse_ms = int((time.perf_counter() - parse_started_at) * 1000)
         total_ms = int((time.perf_counter() - started_at) * 1000)
         logger.info(
@@ -228,7 +262,9 @@ class MockVisionService:
         )
         self.calls: list[tuple[bytes, str | None]] = []
 
-    def extract_label(self, image_bytes: bytes, content_type: str | None = None) -> ExtractedLabel:
+    def extract_label(
+        self, image_bytes: bytes, content_type: str | None = None
+    ) -> ExtractedLabel:
         self.calls.append((image_bytes, content_type))
         return self.label
 
@@ -257,13 +293,19 @@ def preprocess_image(
         minimum=MIN_LONG_EDGE_PIXELS,
         maximum=MAX_LONG_EDGE_PIXELS,
     )
-    jpeg_quality = _clamp_int(jpeg_quality, minimum=MIN_JPEG_QUALITY, maximum=MAX_JPEG_QUALITY)
-    image.thumbnail((max_long_edge_pixels, max_long_edge_pixels), Image.Resampling.LANCZOS)
+    jpeg_quality = _clamp_int(
+        jpeg_quality, minimum=MIN_JPEG_QUALITY, maximum=MAX_JPEG_QUALITY
+    )
+    image.thumbnail(
+        (max_long_edge_pixels, max_long_edge_pixels), Image.Resampling.LANCZOS
+    )
 
     output = BytesIO()
     image.save(output, format="JPEG", quality=jpeg_quality, optimize=True)
     encoded_bytes = output.getvalue()
-    data_url = "data:image/jpeg;base64," + base64.b64encode(encoded_bytes).decode("ascii")
+    data_url = "data:image/jpeg;base64," + base64.b64encode(encoded_bytes).decode(
+        "ascii"
+    )
 
     return PreprocessedImage(
         image_bytes=encoded_bytes,
@@ -284,11 +326,17 @@ def parse_extracted_label_response(response: Any) -> ExtractedLabel:
 def _vision_service_error(exc: Exception) -> VisionServiceError:
     """Map provider exceptions without returning provider text to API callers."""
     name = type(exc).__name__
-    logger.warning("Vision provider request failed: exception_type=%s", name, exc_info=True)
+    logger.warning(
+        "Vision provider request failed: exception_type=%s", name, exc_info=True
+    )
     if name in {"AuthenticationError", "PermissionDeniedError"}:
-        return VisionAuthenticationError("The vision service credentials were rejected.")
+        return VisionAuthenticationError(
+            "The vision service credentials were rejected."
+        )
     if name in {"NotFoundError", "BadRequestError"}:
-        return VisionModelUnavailableError("The configured vision model is unavailable.")
+        return VisionModelUnavailableError(
+            "The configured vision model is unavailable."
+        )
     if name == "RateLimitError":
         return VisionRateLimitError("The vision service is busy.")
     if name in {"APITimeoutError", "TimeoutError"}:
@@ -297,7 +345,9 @@ def _vision_service_error(exc: Exception) -> VisionServiceError:
 
 
 def _flatten_to_rgb(image: Image.Image) -> Image.Image:
-    if image.mode in {"RGBA", "LA"} or (image.mode == "P" and "transparency" in image.info):
+    if image.mode in {"RGBA", "LA"} or (
+        image.mode == "P" and "transparency" in image.info
+    ):
         rgba = image.convert("RGBA")
         background = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
         background.alpha_composite(rgba)
@@ -428,13 +478,13 @@ _EXTRACTED_LABEL_SCHEMA: dict[str, Any] = {
         "class_type": {"anyOf": [{"type": "string"}, {"type": "null"}]},
         "producer": {"anyOf": [{"type": "string"}, {"type": "null"}]},
         "country_of_origin": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-        "abv": {
-            "anyOf": [{"type": "string"}, {"type": "number"}, {"type": "null"}]
-        },
+        "abv": {"anyOf": [{"type": "string"}, {"type": "number"}, {"type": "null"}]},
         "net_contents": {"anyOf": [{"type": "string"}, {"type": "null"}]},
         "government_warning": {"anyOf": [{"type": "string"}, {"type": "null"}]},
         "raw_text": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-        "extraction_confidence": {"anyOf": [{"type": "number", "minimum": 0, "maximum": 1}, {"type": "null"}]},
+        "extraction_confidence": {
+            "anyOf": [{"type": "number", "minimum": 0, "maximum": 1}, {"type": "null"}]
+        },
     },
     "required": list(_FIELDS),
     "additionalProperties": False,
