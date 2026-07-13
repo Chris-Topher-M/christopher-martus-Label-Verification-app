@@ -69,6 +69,13 @@ def _image_bytes(size: tuple[int, int] = (100, 80), mode: str = "RGB") -> bytes:
     return output.getvalue()
 
 
+def _formatted_image_bytes(image_format: str) -> bytes:
+    image = Image.new("RGB", (100, 80), (120, 30, 60))
+    output = BytesIO()
+    image.save(output, format=image_format)
+    return output.getvalue()
+
+
 def test_preprocess_downscales_large_image_and_encodes_jpeg() -> None:
     result = preprocess_image(_image_bytes(size=(3200, 1200)), "image/png")
 
@@ -81,6 +88,18 @@ def test_preprocess_downscales_large_image_and_encodes_jpeg() -> None:
         assert encoded.format == "JPEG"
         assert encoded.mode == "RGB"
         assert encoded.size == (768, 288)
+
+
+@pytest.mark.parametrize("image_format", ["HEIF", "TIFF", "GIF", "BMP"])
+def test_preprocess_converts_common_image_formats_to_jpeg(image_format: str) -> None:
+    result = preprocess_image(_formatted_image_bytes(image_format))
+
+    assert result.content_type == "image/jpeg"
+    assert result.width == 100
+    assert result.height == 80
+    with Image.open(BytesIO(result.image_bytes)) as encoded:
+        assert encoded.format == "JPEG"
+        assert encoded.mode == "RGB"
 
 
 def test_preprocess_honors_configured_size_and_quality_bounds() -> None:
@@ -127,6 +146,13 @@ def test_preprocess_flattens_transparency_to_white_rgb_jpeg() -> None:
 def test_preprocess_rejects_corrupt_bytes_cleanly() -> None:
     with pytest.raises(ImagePreprocessingError):
         preprocess_image(b"not an image", "image/png")
+
+
+def test_preprocess_rejects_decompression_bomb_images(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 16)
+
+    with pytest.raises(ImagePreprocessingError):
+        preprocess_image(_image_bytes(), "image/png")
 
 
 def test_openai_service_uses_injected_client_and_compact_structured_output() -> None:

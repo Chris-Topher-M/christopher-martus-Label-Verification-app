@@ -45,7 +45,6 @@ from backend.app.verification.vision import (
 BASE_DIR = Path(__file__).resolve().parents[2]
 FRONTEND_DIR = BASE_DIR / "frontend"
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
-ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 LATENCY_BUDGET_MS = 5000
 MAX_BATCH_LABELS = 10
 DEFAULT_BATCH_CONCURRENCY = 3
@@ -247,9 +246,8 @@ async def verify(
         }
     )
     content_type = image.content_type
-    if content_type not in ALLOWED_IMAGE_TYPES:
-        allowed = "JPG, PNG, or WebP"
-        _raise_readable_error(415, f"Please upload a {allowed} image.")
+    if not _is_image_content_type(content_type):
+        _raise_readable_error(415, "Please upload an image file.")
 
     image_bytes = await image.read()
     if not image_bytes:
@@ -418,13 +416,20 @@ def _batch_application_data(raw_item: Any, index: int) -> tuple[str, Application
 
 
 def _batch_image_error(image_bytes: bytes, content_type: str | None) -> str | None:
-    if content_type not in ALLOWED_IMAGE_TYPES:
-        return "Please upload a JPG, PNG, or WebP image for this label."
+    if not _is_image_content_type(content_type):
+        return "Please upload an image file for this label."
     if not image_bytes:
         return "Please upload a non-empty image file for this label."
     if len(image_bytes) > MAX_IMAGE_BYTES:
         return "Please upload an image smaller than 10 MB for this label."
     return None
+
+
+def _is_image_content_type(content_type: str | None) -> bool:
+    if content_type is None:
+        return False
+    media_type = content_type.split(";", maxsplit=1)[0].strip().lower()
+    return media_type.startswith("image/") and len(media_type) > len("image/")
 
 
 def _batch_concurrency() -> int:

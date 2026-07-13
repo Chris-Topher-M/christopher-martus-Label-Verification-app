@@ -115,6 +115,22 @@ def test_verify_passes_uploaded_bytes_and_content_type_to_vision_service() -> No
     assert service.calls == [(image_bytes, "image/webp")]
 
 
+def test_verify_accepts_heic_image_content_type() -> None:
+    service = MockVisionService()
+    app.dependency_overrides[get_vision_service] = lambda: lambda: service
+    client = TestClient(app)
+    image_bytes = _image_bytes()
+
+    response = client.post(
+        "/verify",
+        data=_application_form(),
+        files={"image": ("label.heic", image_bytes, "image/heic")},
+    )
+
+    assert response.status_code == 200
+    assert service.calls == [(image_bytes, "image/heic")]
+
+
 def test_verify_runs_vision_extraction_in_the_event_loop() -> None:
     service = _EventLoopVisionService()
     app.dependency_overrides[get_vision_service] = lambda: lambda: service
@@ -186,7 +202,7 @@ def test_unsupported_file_type_returns_415_without_calling_vision() -> None:
 
     assert response.status_code == 415
     assert response.headers["server-timing"].startswith("app;dur=")
-    assert response.json()["error"]["message"] == "Please upload a JPG, PNG, or WebP image."
+    assert response.json()["error"]["message"] == "Please upload an image file."
     assert service.calls == []
 
 

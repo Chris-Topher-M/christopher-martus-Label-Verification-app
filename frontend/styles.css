@@ -9,6 +9,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
 }
@@ -149,6 +153,13 @@ input[type="file"] {
 
 .field-wide {
   grid-column: 1 / -1;
+}
+
+.field-hint {
+  margin: 0;
+  color: #44546f;
+  font-size: 17px;
+  line-height: 1.4;
 }
 
 input[type="text"],
@@ -331,6 +342,24 @@ button:disabled {
 
 .remove-button:hover:not(:disabled) {
   background: #fff1f0;
+}
+
+.copy-button {
+  width: 100%;
+  min-height: 54px;
+  margin: 0 0 18px;
+  padding: 10px 18px;
+  border: 2px solid #1f5f99;
+  border-radius: 8px;
+  background: #eef6ff;
+  color: #14385f;
+  font-size: 19px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.copy-button:hover:not(:disabled) {
+  background: #dceeff;
 }
 
 .error-box {

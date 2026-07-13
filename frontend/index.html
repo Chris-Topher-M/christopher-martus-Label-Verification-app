@@ -31,12 +31,13 @@
               id="image"
               name="image"
               type="file"
-              accept="image/jpeg,image/png,image/webp"
+              accept="image/*"
               aria-describedby="selected-file"
               required
             >
             <p id="selected-file" class="selected-file">No image selected</p>
             <img id="image-preview" class="image-preview" alt="Selected label preview" hidden>
+            <p id="image-preview-status" class="field-hint" hidden></p>
           </div>
 
           <div class="fields-grid">
@@ -62,12 +63,14 @@
 
             <div class="field">
               <label for="abv">Alcohol by Volume</label>
-              <input id="abv" name="abv" type="text" autocomplete="off" required>
+              <input id="abv" name="abv" type="text" inputmode="decimal" autocomplete="off" aria-describedby="abv-hint" required>
+              <p id="abv-hint" class="field-hint">Examples: 13.5%, 13.5, 0.135, or 27 proof</p>
             </div>
 
             <div class="field">
               <label for="net_contents">Net Contents</label>
-              <input id="net_contents" name="net_contents" type="text" autocomplete="off" required>
+              <input id="net_contents" name="net_contents" type="text" inputmode="decimal" autocomplete="off" aria-describedby="net-contents-hint" required>
+              <p id="net-contents-hint" class="field-hint">Examples: 750 mL, 0.75 L, or 25 fl oz</p>
             </div>
 
             <div class="field field-wide">
@@ -83,7 +86,7 @@
             Checking the label. This usually takes a few seconds.
           </p>
           <p id="cold-start-message" class="loading-message" role="status" aria-live="polite" hidden>
-            The service may be waking up. Your label is still being checked and may take up to a minute.
+            The free-tier server may take up to a minute to wake. This attempt will stop after five seconds. If it does, wait a moment and try again.
           </p>
         </form>
 
@@ -96,7 +99,7 @@
               id="batch-images"
               name="images"
               type="file"
-              accept="image/jpeg,image/png,image/webp"
+              accept="image/*"
               aria-describedby="batch-selected-files"
               multiple
               required
@@ -116,6 +119,9 @@
             <div class="spinner" aria-hidden="true"></div>
             <p>Checking labels. This can take a few seconds.</p>
           </div>
+          <p id="batch-cold-start-message" class="loading-message" role="status" aria-live="polite" hidden>
+            The free-tier server may take up to a minute to wake. This attempt will stop after five seconds. If it does, wait a moment and try again.
+          </p>
         </form>
 
         <section id="batch-results" class="results" aria-live="polite" tabindex="-1" hidden></section>

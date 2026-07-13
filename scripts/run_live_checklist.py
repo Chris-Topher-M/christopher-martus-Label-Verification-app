@@ -219,7 +219,7 @@ def check_wrong_file_type(client: httpx.Client, base_url: str) -> CheckResult:
         content_type="text/plain",
     )
     body = safe_json(response)
-    passed = response.status_code == 415 and "JPG, PNG, or WebP" in json.dumps(body)
+    passed = response.status_code == 415 and "Please upload an image file" in json.dumps(body)
     return CheckResult("wrong file type", passed, f"HTTP {response.status_code}: {body}", elapsed)
 
 

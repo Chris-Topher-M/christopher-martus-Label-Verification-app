@@ -37,6 +37,9 @@ def test_root_serves_single_label_verification_form() -> None:
     assert 'name="abv"' in html
     assert 'name="net_contents"' in html
     assert 'name="government_warning"' in html
+    assert html.count('accept="image/*"') == 2
+    assert 'inputmode="decimal"' in html
+    assert 'id="batch-cold-start-message"' in html
     assert "Verify Label" in html
 
 
@@ -51,6 +54,11 @@ def test_frontend_script_posts_to_verify_and_uses_readable_result_labels() -> No
     assert "Exact match required, including capital letters and punctuation." in script
     assert "Could not read this on the label." in script
     assert "COLD_START_DELAY_MS" in script
+    assert "const VERIFY_TIMEOUT_MS = 5000" in script
+    assert "const COLD_START_DELAY_MS = 3000" in script
+    assert "Copy details from first label" in script
+    assert "validateAbv" in script
+    assert "validateNetContents" in script
 
 
 def test_frontend_has_accessible_status_error_and_result_regions() -> None:

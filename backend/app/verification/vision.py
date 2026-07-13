@@ -9,14 +9,17 @@ import logging
 import os
 import time
 from typing import Any, Protocol
+import warnings
 
 from PIL import Image, ImageOps, UnidentifiedImageError
+from pillow_heif import register_heif_opener
 from pydantic import ValidationError
 
 from backend.app.verification.models import ExtractedLabel
 
 
 logger = logging.getLogger(__name__)
+register_heif_opener()
 
 DEFAULT_VISION_MODEL = "gpt-5.4-nano-2026-03-17"
 DEFAULT_TIMEOUT_SECONDS = 4.5
@@ -393,10 +396,18 @@ def preprocess_image(
     jpeg_quality: int = DEFAULT_JPEG_QUALITY,
 ) -> PreprocessedImage:
     try:
-        with Image.open(BytesIO(image_bytes)) as raw_image:
-            image = ImageOps.exif_transpose(raw_image)
-            image.load()
-    except (UnidentifiedImageError, OSError) as exc:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(BytesIO(image_bytes)) as raw_image:
+                image = ImageOps.exif_transpose(raw_image)
+                image.load()
+    except (
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,
+        UnidentifiedImageError,
+        OSError,
+        ValueError,
+    ) as exc:
         raise ImagePreprocessingError("Uploaded file is not a readable image.") from exc
 
     image = _flatten_to_rgb(image)

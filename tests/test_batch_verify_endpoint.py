@@ -115,7 +115,7 @@ def test_bad_label_in_batch_becomes_item_error_without_failing_batch() -> None:
     assert body["items"][0]["overall_verdict"] == "APPROVED"
     assert body["items"][1]["overall_verdict"] == "NEEDS_REVIEW"
     assert body["items"][1]["results"] == []
-    assert body["items"][1]["error"] == "Please upload a JPG, PNG, or WebP image for this label."
+    assert body["items"][1]["error"] == "Please upload an image file for this label."
     assert service.calls == [(valid_image, "image/png")]
 
 

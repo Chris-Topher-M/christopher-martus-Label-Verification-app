@@ -24,7 +24,9 @@ The FastAPI backend serves the plain HTML/CSS/JavaScript frontend, so the fronte
 ## Core Requirements Covered
 
 - Batch upload is supported through the UI and `POST /verify/batch`.
+- Batch rows after the first can copy all seven application fields from the first label.
 - Single-label verification has a 5-second target under normal deployed conditions.
+- The browser stops single and batch requests after 5 seconds and explains when a free-tier server may still be waking.
 - The app has no database and does not persist label history.
 - API keys are read from environment variables only.
 - The UI uses large, direct labels, clear errors, and simple pass/review results for non-technical users.
@@ -232,7 +234,7 @@ Example 4xx error response from `POST /verify` when the uploaded file type is no
 ```json
 {
   "error": {
-    "message": "Please upload a JPG, PNG, or WebP image.",
+    "message": "Please upload an image file.",
     "details": []
   }
 }
@@ -240,7 +242,7 @@ Example 4xx error response from `POST /verify` when the uploaded file type is no
 
 ## Upload Limits
 
-- Supported image formats: JPG, PNG, WebP
+- Supported image formats include JPG, PNG, WebP, HEIC/HEIF, TIFF, GIF, and BMP. Other `image/*` uploads are accepted when Pillow can decode their contents.
 - Maximum image size: 10 MB per image
 - Maximum batch size: 10 labels
 

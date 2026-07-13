@@ -9,6 +9,7 @@ const modeEyebrow = document.querySelector("#mode-eyebrow");
 const imageInput = document.querySelector("#image");
 const selectedFile = document.querySelector("#selected-file");
 const imagePreview = document.querySelector("#image-preview");
+const imagePreviewStatus = document.querySelector("#image-preview-status");
 
 const singleModeButton = document.querySelector("#single-mode-button");
 const batchModeButton = document.querySelector("#batch-mode-button");
@@ -19,30 +20,44 @@ const batchList = document.querySelector("#batch-list");
 const batchSubmitButton = document.querySelector("#batch-submit-button");
 const batchLoadingMessage = document.querySelector("#batch-loading-message");
 const batchProgressPanel = document.querySelector("#batch-progress-panel");
+const batchColdStartMessage = document.querySelector("#batch-cold-start-message");
 const batchErrorBox = document.querySelector("#batch-error-box");
 const batchResults = document.querySelector("#batch-results");
 
-const VERIFY_TIMEOUT_MS = 30000;
+const VERIFY_TIMEOUT_MS = 5000;
 const PROGRESS_DELAY_MS = 600;
-const COLD_START_DELAY_MS = 2000;
+const COLD_START_DELAY_MS = 3000;
 const MAX_BATCH_LABELS = 10;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
-const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 const FIELDS = [
   { name: "brand_name", label: "Brand Name", type: "input" },
   { name: "class_type", label: "Class / Type", type: "input" },
   { name: "producer", label: "Producer Name", type: "input" },
   { name: "country_of_origin", label: "Country of Origin", type: "input" },
-  { name: "abv", label: "Alcohol by Volume", type: "input" },
-  { name: "net_contents", label: "Net Contents", type: "input" },
+  {
+    name: "abv",
+    label: "Alcohol by Volume",
+    type: "input",
+    inputMode: "decimal",
+    hint: "Examples: 13.5%, 13.5, 0.135, or 27 proof",
+    validation: "abv",
+  },
+  {
+    name: "net_contents",
+    label: "Net Contents",
+    type: "input",
+    inputMode: "decimal",
+    hint: "Examples: 750 mL, 0.75 L, or 25 fl oz",
+    validation: "net_contents",
+  },
   { name: "government_warning", label: "Government Warning", type: "textarea" },
 ];
 
 const FIELD_LABELS = Object.fromEntries(FIELDS.map((field) => [field.name, field.label]));
 let previewUrl = null;
 let batchItems = [];
-let hasCompletedSingleRequest = false;
+let serverHasResponded = false;
 
 singleModeButton.addEventListener("click", () => setMode("single"));
 batchModeButton.addEventListener("click", () => setMode("batch"));
@@ -57,7 +72,8 @@ batchImageInput.addEventListener("change", () => {
   batchItems = Array.from(batchImageInput.files || []).map((file, index) => ({
     id: makeClientId(index),
     file,
-    previewUrl: ALLOWED_IMAGE_TYPES.has(file.type) ? URL.createObjectURL(file) : null,
+    previewUrl: URL.createObjectURL(file),
+    values: emptyBatchValues(),
   }));
   hideError(batchErrorBox);
   batchResults.hidden = true;
@@ -81,9 +97,12 @@ form.addEventListener("submit", async (event) => {
   const timeout = new AbortController();
   const timeoutId = window.setTimeout(() => timeout.abort(), VERIFY_TIMEOUT_MS);
   const formData = new FormData(form);
-  const coldStartId = hasCompletedSingleRequest
+  let coldStartShown = false;
+  const coldStartId = serverHasResponded
     ? null
     : window.setTimeout(() => {
+        coldStartShown = true;
+        loadingMessage.hidden = true;
         coldStartMessage.hidden = false;
       }, COLD_START_DELAY_MS);
 
@@ -96,6 +115,7 @@ form.addEventListener("submit", async (event) => {
       body: formData,
       signal: timeout.signal,
     });
+    serverHasResponded = true;
     const data = await readJson(response);
 
     if (!response.ok) {
@@ -109,7 +129,10 @@ form.addEventListener("submit", async (event) => {
     statusLine.textContent = "Label check complete.";
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
-      showError(errorBox, "Verification took too long. Please try again.");
+      const message = coldStartShown
+        ? "The server may still be waking up. Wait a moment and try again."
+        : "Verification took longer than five seconds. Please try again.";
+      showError(errorBox, message);
     } else {
       showError(errorBox, "Unable to reach verification right now. Please try again.");
     }
@@ -120,7 +143,6 @@ form.addEventListener("submit", async (event) => {
       window.clearTimeout(coldStartId);
     }
     coldStartMessage.hidden = true;
-    hasCompletedSingleRequest = true;
     setSingleBusy(false);
   }
 });
@@ -148,9 +170,21 @@ batchForm.addEventListener("submit", async (event) => {
 
   const timeout = new AbortController();
   const timeoutId = window.setTimeout(() => timeout.abort(), VERIFY_TIMEOUT_MS);
+  let coldStartShown = false;
   const progressId = window.setTimeout(() => {
-    batchProgressPanel.hidden = false;
+    if (!coldStartShown) {
+      batchLoadingMessage.hidden = true;
+      batchProgressPanel.hidden = false;
+    }
   }, PROGRESS_DELAY_MS);
+  const coldStartId = serverHasResponded
+    ? null
+    : window.setTimeout(() => {
+        coldStartShown = true;
+        batchLoadingMessage.hidden = true;
+        batchProgressPanel.hidden = true;
+        batchColdStartMessage.hidden = false;
+      }, COLD_START_DELAY_MS);
 
   setBatchBusy(true);
   statusLine.textContent = "Checking labels...";
@@ -161,6 +195,7 @@ batchForm.addEventListener("submit", async (event) => {
       body: formData,
       signal: timeout.signal,
     });
+    serverHasResponded = true;
     const data = await readJson(response);
 
     if (!response.ok) {
@@ -174,7 +209,10 @@ batchForm.addEventListener("submit", async (event) => {
     statusLine.textContent = "Batch check complete.";
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
-      showError(batchErrorBox, "Batch verification took too long. Please try again.");
+      const message = coldStartShown
+        ? "The server may still be waking up. Wait a moment and try again."
+        : "Batch verification took longer than five seconds. Please try again.";
+      showError(batchErrorBox, message);
     } else {
       showError(batchErrorBox, "Unable to reach verification right now. Please try again.");
     }
@@ -182,6 +220,9 @@ batchForm.addEventListener("submit", async (event) => {
   } finally {
     window.clearTimeout(timeoutId);
     window.clearTimeout(progressId);
+    if (coldStartId !== null) {
+      window.clearTimeout(coldStartId);
+    }
     setBatchBusy(false);
   }
 });
@@ -210,19 +251,27 @@ function setSelectedFile(file) {
     selectedFile.textContent = "No image selected";
     imagePreview.hidden = true;
     imagePreview.removeAttribute("src");
+    imagePreviewStatus.hidden = true;
+    imagePreviewStatus.textContent = "";
     return;
   }
 
   selectedFile.textContent = file.name;
 
-  if (ALLOWED_IMAGE_TYPES.has(file.type)) {
-    previewUrl = URL.createObjectURL(file);
-    imagePreview.src = previewUrl;
+  imagePreviewStatus.hidden = true;
+  imagePreviewStatus.textContent = "";
+  previewUrl = URL.createObjectURL(file);
+  imagePreview.onload = () => {
     imagePreview.hidden = false;
-  } else {
+    imagePreviewStatus.hidden = true;
+  };
+  imagePreview.onerror = () => {
     imagePreview.hidden = true;
     imagePreview.removeAttribute("src");
-  }
+    imagePreviewStatus.textContent = "Preview unavailable; file will still be checked.";
+    imagePreviewStatus.hidden = false;
+  };
+  imagePreview.src = previewUrl;
 }
 
 function renderBatchRows() {
@@ -231,12 +280,12 @@ function renderBatchRows() {
     ? `${batchItems.length} image${batchItems.length === 1 ? "" : "s"} selected`
     : "No images selected";
 
-  for (const item of batchItems) {
-    batchList.append(renderBatchRow(item));
+  for (const [index, item] of batchItems.entries()) {
+    batchList.append(renderBatchRow(item, index));
   }
 }
 
-function renderBatchRow(item) {
+function renderBatchRow(item, index) {
   const row = document.createElement("article");
   row.className = "batch-label-card";
   row.dataset.clientId = item.id;
@@ -250,6 +299,10 @@ function renderBatchRow(item) {
     const image = document.createElement("img");
     image.src = item.previewUrl;
     image.alt = `${item.file.name} preview`;
+    image.addEventListener("error", () => {
+      image.remove();
+      preview.textContent = "Preview unavailable; file will still be checked.";
+    });
     preview.append(image);
   } else {
     preview.textContent = "No preview";
@@ -266,11 +319,23 @@ function renderBatchRow(item) {
   removeButton.addEventListener("click", () => removeBatchItem(item.id));
 
   header.append(preview, title, removeButton);
-  row.append(header, renderBatchFields(item.id));
+  row.append(header);
+
+  if (index > 0) {
+    const copyButton = document.createElement("button");
+    copyButton.type = "button";
+    copyButton.className = "copy-button";
+    copyButton.textContent = "Copy details from first label";
+    copyButton.setAttribute("aria-label", `Copy all details from the first label to ${item.file.name}`);
+    copyButton.addEventListener("click", () => copyFirstBatchValues(item.id));
+    row.append(copyButton);
+  }
+
+  row.append(renderBatchFields(item));
   return row;
 }
 
-function renderBatchFields(clientId) {
+function renderBatchFields(item) {
   const grid = document.createElement("div");
   grid.className = "fields-grid";
 
@@ -278,7 +343,7 @@ function renderBatchFields(clientId) {
     const wrapper = document.createElement("div");
     wrapper.className = field.name === "government_warning" ? "field field-wide" : "field";
 
-    const inputId = `${clientId}-${field.name}`;
+    const inputId = `${item.id}-${field.name}`;
     const label = document.createElement("label");
     label.setAttribute("for", inputId);
     label.textContent = field.label;
@@ -288,18 +353,45 @@ function renderBatchFields(clientId) {
     input.id = inputId;
     input.dataset.field = field.name;
     input.required = true;
+    input.value = item.values[field.name];
+    input.addEventListener("input", () => {
+      item.values[field.name] = input.value;
+    });
     if (field.type === "textarea") {
       input.rows = 6;
     } else {
       input.type = "text";
       input.autocomplete = "off";
+      if (field.inputMode) {
+        input.inputMode = field.inputMode;
+      }
     }
 
     wrapper.append(label, input);
+    if (field.hint) {
+      const hint = document.createElement("p");
+      hint.id = `${inputId}-hint`;
+      hint.className = "field-hint";
+      hint.textContent = field.hint;
+      input.setAttribute("aria-describedby", hint.id);
+      wrapper.append(hint);
+    }
     grid.append(wrapper);
   }
 
   return grid;
+}
+
+function copyFirstBatchValues(targetClientId) {
+  const source = batchItems[0];
+  const target = batchItems.find((item) => item.id === targetClientId);
+  if (!source || !target || source === target) {
+    return;
+  }
+
+  target.values = { ...source.values };
+  renderBatchRows();
+  statusLine.textContent = `Copied details from ${source.file.name} to ${target.file.name}.`;
 }
 
 function removeBatchItem(clientId) {
@@ -319,15 +411,22 @@ function validateSingleForm() {
   const file = imageInput.files?.[0];
 
   if (!file) {
-    errors.push("Label Image: Please choose a JPG, PNG, or WebP image.");
-  } else if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
-    errors.push("Label Image: Please choose a JPG, PNG, or WebP image.");
+    errors.push("Label Image: Please choose an image.");
+  } else if (file.size > MAX_IMAGE_BYTES) {
+    errors.push("Label Image: Please choose an image smaller than 10 MB.");
   }
 
   for (const field of FIELDS) {
     const input = form.elements[field.name];
-    if (!input.value.trim()) {
+    const value = input.value.trim();
+    if (!value) {
       errors.push(`${field.label}: Field is required.`);
+      continue;
+    }
+
+    const formatError = validateFieldValue(field, value);
+    if (formatError) {
+      errors.push(`${field.label}: ${formatError}`);
     }
   }
 
@@ -338,24 +437,27 @@ function validateBatchForm() {
   const errors = [];
 
   if (batchItems.length === 0) {
-    errors.push("Label Images: Please choose at least one JPG, PNG, or WebP image.");
+    errors.push("Label Images: Please choose at least one image.");
   }
   if (batchItems.length > MAX_BATCH_LABELS) {
     errors.push(`Label Images: Please choose no more than ${MAX_BATCH_LABELS} images.`);
   }
 
   for (const item of batchItems) {
-    if (!ALLOWED_IMAGE_TYPES.has(item.file.type)) {
-      errors.push(`${item.file.name}: Please choose a JPG, PNG, or WebP image.`);
-    }
     if (item.file.size > MAX_IMAGE_BYTES) {
       errors.push(`${item.file.name}: Please choose an image smaller than 10 MB.`);
     }
 
     for (const field of FIELDS) {
-      const value = batchFieldInput(item.id, field.name)?.value || "";
+      const value = item.values[field.name] || "";
       if (!value.trim()) {
         errors.push(`${item.file.name} - ${field.label}: Field is required.`);
+        continue;
+      }
+
+      const formatError = validateFieldValue(field, value.trim());
+      if (formatError) {
+        errors.push(`${item.file.name} - ${field.label}: ${formatError}`);
       }
     }
   }
@@ -364,22 +466,55 @@ function validateBatchForm() {
 }
 
 function batchItemFieldValues(clientId) {
+  const item = batchItems.find((candidate) => candidate.id === clientId);
   return Object.fromEntries(
-    FIELDS.map((field) => [field.name, batchFieldInput(clientId, field.name).value.trim()]),
+    FIELDS.map((field) => [field.name, item?.values[field.name].trim() || ""]),
   );
 }
 
-function batchFieldInput(clientId, fieldName) {
-  return batchList.querySelector(`[data-client-id="${clientId}"] [data-field="${fieldName}"]`);
+function emptyBatchValues() {
+  return Object.fromEntries(FIELDS.map((field) => [field.name, ""]));
+}
+
+function validateFieldValue(field, value) {
+  if (field.validation === "abv") {
+    return validateAbv(value);
+  }
+  if (field.validation === "net_contents") {
+    return validateNetContents(value);
+  }
+  return null;
+}
+
+function validateAbv(value) {
+  const match = value.match(/^(\d+(?:\.\d+)?)\s*(%|proof)?$/i);
+  if (!match) {
+    return "Enter a number such as 13.5%, 13.5, 0.135, or 27 proof.";
+  }
+
+  const amount = Number(match[1]);
+  const unit = match[2]?.toLowerCase();
+  const isInRange = unit === "proof" ? amount <= 200 : amount <= 100;
+  return isInRange ? null : unit === "proof"
+    ? "Proof must be between 0 and 200."
+    : "Alcohol by volume must be between 0 and 100 percent.";
+}
+
+function validateNetContents(value) {
+  const match = value.match(
+    /^(\d+(?:\.\d+)?)\s*(fluid\s*ounces?|fl\.?\s*oz\.?|ounces?|oz\.?|milliliters?|ml|centiliters?|cl|liters?|l)\.?$/i,
+  );
+  if (!match || Number(match[1]) <= 0) {
+    return "Enter a positive amount with a unit, such as 750 mL, 0.75 L, or 25 fl oz.";
+  }
+  return null;
 }
 
 function setSingleBusy(isBusy) {
   submitButton.disabled = isBusy;
   submitButton.textContent = isBusy ? "Checking Label..." : "Verify Label";
   loadingMessage.hidden = !isBusy;
-  if (!isBusy) {
-    coldStartMessage.hidden = true;
-  }
+  coldStartMessage.hidden = true;
 
   for (const element of form.elements) {
     if (element !== submitButton) {
@@ -392,9 +527,8 @@ function setBatchBusy(isBusy) {
   batchSubmitButton.disabled = isBusy;
   batchSubmitButton.textContent = isBusy ? "Checking Labels..." : "Verify Batch";
   batchLoadingMessage.hidden = !isBusy;
-  if (!isBusy) {
-    batchProgressPanel.hidden = true;
-  }
+  batchProgressPanel.hidden = true;
+  batchColdStartMessage.hidden = true;
 
   for (const element of batchForm.elements) {
     if (element !== batchSubmitButton) {
