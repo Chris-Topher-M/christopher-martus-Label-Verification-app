@@ -6,10 +6,9 @@ Stateless proof-of-concept for checking alcohol label images against expected TT
 
 - Public repository: https://github.com/Chris-Topher-M/christopher-martus-Label-Verification-app
 - Current reviewed branch: `master`
-- Current reviewed commit: `7fe8842`
 - Deployed frontend/API base URL: https://ttb-label-verification-ozud.onrender.com
 - Deployed health URL: https://ttb-label-verification-ozud.onrender.com/health
-- Last verified live: July 8, 2026
+- Last verified live: July 13, 2026
 
 The FastAPI backend serves the plain HTML/CSS/JavaScript frontend, so the frontend and API share one deployed base URL.
 
@@ -64,6 +63,8 @@ If `uv` is unavailable but dependencies are already installed in `.venv`, use th
 | `VISION_MAX_OUTPUT_TOKENS` | No | `500` | Maximum response tokens allowed for structured extraction output. |
 | `BATCH_CONCURRENCY` | No | `3` | Maximum number of label verifications processed concurrently in `POST /verify/batch`, clamped to the range `1` to `10`. |
 
+The 10 MB image limit, 10-label batch limit, and 5-second frontend timeout are code constants, not environment variables.
+
 Do not commit `.env`, `.env.*`, request logs, or any file containing real secret values.
 
 ## Run Locally
@@ -115,6 +116,8 @@ Each phase used a human gate between `PLAN`, `REVIEW`, and `EXECUTE`. That gate 
 
 AI-generated work included implementation drafts, refactors, tests, and documentation updates proposed through Codex. Human-written or human-controlled work included the project requirements, phase approval, scope checks between steps, and the decision to stop or revise work before execution when a plan did not yet meet the requirements.
 
+One explicit human scope decision was to use a single “Copy details from first label” action for batch entry instead of the larger template-panel workflow considered during planning. That kept the usability fix small while removing the need to retype the government warning for every label.
+
 Technical approach:
 
 - FastAPI handles uploads, validation, static frontend serving, and JSON API responses.
@@ -129,6 +132,7 @@ Technical approach:
 - FastAPI
 - Plain HTML/CSS/JavaScript frontend
 - OpenAI Responses API for vision extraction with an environment-selected model and a pinned `gpt-5.4-nano-2026-03-17` fallback
+- Verified against [OpenAI's current GPT-5.4 nano model list](https://developers.openai.com/api/docs/models/gpt-5.4-nano) on July 13, 2026.
 - Model access is verified by the deployment startup check
 - Pillow for image preprocessing
 - Pytest for automated tests
@@ -156,7 +160,7 @@ curl -X POST "https://ttb-label-verification-ozud.onrender.com/verify" \
   -F "government_warning=GOVERNMENT WARNING: (1) ACCORDING TO THE SURGEON GENERAL, WOMEN SHOULD NOT DRINK ALCOHOLIC BEVERAGES DURING PREGNANCY BECAUSE OF THE RISK OF BIRTH DEFECTS. (2) CONSUMPTION OF ALCOHOLIC BEVERAGES IMPAIRS YOUR ABILITY TO DRIVE A CAR OR OPERATE MACHINERY, AND MAY CAUSE HEALTH PROBLEMS."
 ```
 
-Expected success response shape:
+Expected stable success fields. The live response also includes a runtime-measured `latency_ms` value, which is intentionally omitted here because it varies by request:
 
 ```json
 {
@@ -168,9 +172,50 @@ Expected success response shape:
       "expected": "Acme Reserve",
       "found": "Acme Reserve",
       "status": "PASS"
+    },
+    {
+      "field": "class_type",
+      "match_type": "fuzzy",
+      "expected": "Red Wine",
+      "found": "Red Wine",
+      "status": "PASS"
+    },
+    {
+      "field": "producer",
+      "match_type": "fuzzy",
+      "expected": "Acme Winery, LLC",
+      "found": "Acme Winery, LLC",
+      "status": "PASS"
+    },
+    {
+      "field": "country_of_origin",
+      "match_type": "normalized",
+      "expected": "United States",
+      "found": "United States",
+      "status": "PASS"
+    },
+    {
+      "field": "abv",
+      "match_type": "normalized",
+      "expected": "13.5%",
+      "found": "13.5%",
+      "status": "PASS"
+    },
+    {
+      "field": "net_contents",
+      "match_type": "normalized",
+      "expected": "750 mL",
+      "found": "750 mL",
+      "status": "PASS"
+    },
+    {
+      "field": "government_warning",
+      "match_type": "exact",
+      "expected": "GOVERNMENT WARNING: (1) ACCORDING TO THE SURGEON GENERAL, WOMEN SHOULD NOT DRINK ALCOHOLIC BEVERAGES DURING PREGNANCY BECAUSE OF THE RISK OF BIRTH DEFECTS. (2) CONSUMPTION OF ALCOHOLIC BEVERAGES IMPAIRS YOUR ABILITY TO DRIVE A CAR OR OPERATE MACHINERY, AND MAY CAUSE HEALTH PROBLEMS.",
+      "found": "GOVERNMENT WARNING: (1) ACCORDING TO THE SURGEON GENERAL, WOMEN SHOULD NOT DRINK ALCOHOLIC BEVERAGES DURING PREGNANCY BECAUSE OF THE RISK OF BIRTH DEFECTS. (2) CONSUMPTION OF ALCOHOLIC BEVERAGES IMPAIRS YOUR ABILITY TO DRIVE A CAR OR OPERATE MACHINERY, AND MAY CAUSE HEALTH PROBLEMS.",
+      "status": "PASS"
     }
-  ],
-  "latency_ms": 1800
+  ]
 }
 ```
 
@@ -178,12 +223,12 @@ Batch verification with `POST /verify/batch`:
 
 ```bash
 curl -X POST "https://ttb-label-verification-ozud.onrender.com/verify/batch" \
-  -F 'items=[{"client_id":"label-1","brand_name":"Acme Reserve","class_type":"Red Wine","producer":"Acme Winery, LLC","country_of_origin":"United States","abv":"13.5%","net_contents":"750 mL","government_warning":"GOVERNMENT WARNING: ..."}]' \
+  -F 'items=[{"client_id":"label-1","brand_name":"Acme Reserve","class_type":"Red Wine","producer":"Acme Winery, LLC","country_of_origin":"United States","abv":"13.5%","net_contents":"750 mL","government_warning":"GOVERNMENT WARNING: (1) ACCORDING TO THE SURGEON GENERAL, WOMEN SHOULD NOT DRINK ALCOHOLIC BEVERAGES DURING PREGNANCY BECAUSE OF THE RISK OF BIRTH DEFECTS. (2) CONSUMPTION OF ALCOHOLIC BEVERAGES IMPAIRS YOUR ABILITY TO DRIVE A CAR OR OPERATE MACHINERY, AND MAY CAUSE HEALTH PROBLEMS."},{"client_id":"label-2","brand_name":"Acme Reserve","class_type":"Red Wine","producer":"Acme Winery, LLC","country_of_origin":"United States","abv":"13.5%","net_contents":"750 mL","government_warning":"GOVERNMENT WARNING: (1) ACCORDING TO THE SURGEON GENERAL, WOMEN SHOULD NOT DRINK ALCOHOLIC BEVERAGES DURING PREGNANCY BECAUSE OF THE RISK OF BIRTH DEFECTS. (2) CONSUMPTION OF ALCOHOLIC BEVERAGES IMPAIRS YOUR ABILITY TO DRIVE A CAR OR OPERATE MACHINERY, AND MAY CAUSE HEALTH PROBLEMS."}]' \
   -F "images=@label-1.png;type=image/png" \
   -F "images=@label-2.png;type=image/png"
 ```
 
-Expected batch success response shape:
+Expected stable batch success fields. Each live item also contains its own runtime-measured `latency_ms` value:
 
 ```json
 {
@@ -204,10 +249,52 @@ Expected batch success response shape:
           "expected": "Acme Reserve",
           "found": "Acme Reserve",
           "status": "PASS"
+        },
+        {
+          "field": "class_type",
+          "match_type": "fuzzy",
+          "expected": "Red Wine",
+          "found": "Red Wine",
+          "status": "PASS"
+        },
+        {
+          "field": "producer",
+          "match_type": "fuzzy",
+          "expected": "Acme Winery, LLC",
+          "found": "Acme Winery, LLC",
+          "status": "PASS"
+        },
+        {
+          "field": "country_of_origin",
+          "match_type": "normalized",
+          "expected": "United States",
+          "found": "United States",
+          "status": "PASS"
+        },
+        {
+          "field": "abv",
+          "match_type": "normalized",
+          "expected": "13.5%",
+          "found": "13.5%",
+          "status": "PASS"
+        },
+        {
+          "field": "net_contents",
+          "match_type": "normalized",
+          "expected": "750 mL",
+          "found": "750 mL",
+          "status": "PASS"
+        },
+        {
+          "field": "government_warning",
+          "match_type": "exact",
+          "expected": "GOVERNMENT WARNING: (1) ACCORDING TO THE SURGEON GENERAL, WOMEN SHOULD NOT DRINK ALCOHOLIC BEVERAGES DURING PREGNANCY BECAUSE OF THE RISK OF BIRTH DEFECTS. (2) CONSUMPTION OF ALCOHOLIC BEVERAGES IMPAIRS YOUR ABILITY TO DRIVE A CAR OR OPERATE MACHINERY, AND MAY CAUSE HEALTH PROBLEMS.",
+          "found": "GOVERNMENT WARNING: (1) ACCORDING TO THE SURGEON GENERAL, WOMEN SHOULD NOT DRINK ALCOHOLIC BEVERAGES DURING PREGNANCY BECAUSE OF THE RISK OF BIRTH DEFECTS. (2) CONSUMPTION OF ALCOHOLIC BEVERAGES IMPAIRS YOUR ABILITY TO DRIVE A CAR OR OPERATE MACHINERY, AND MAY CAUSE HEALTH PROBLEMS.",
+          "status": "PASS"
         }
       ],
-      "latency_ms": 1500,
-      "error": null
+      "error": null,
+      "error_code": null
     },
     {
       "client_id": "label-2",
@@ -220,21 +307,77 @@ Expected batch success response shape:
           "expected": "Acme Reserve",
           "found": "Acme Reserve",
           "status": "PASS"
+        },
+        {
+          "field": "class_type",
+          "match_type": "fuzzy",
+          "expected": "Red Wine",
+          "found": "Red Wine",
+          "status": "PASS"
+        },
+        {
+          "field": "producer",
+          "match_type": "fuzzy",
+          "expected": "Acme Winery, LLC",
+          "found": "Acme Winery, LLC",
+          "status": "PASS"
+        },
+        {
+          "field": "country_of_origin",
+          "match_type": "normalized",
+          "expected": "United States",
+          "found": "United States",
+          "status": "PASS"
+        },
+        {
+          "field": "abv",
+          "match_type": "normalized",
+          "expected": "13.5%",
+          "found": "13.5%",
+          "status": "PASS"
+        },
+        {
+          "field": "net_contents",
+          "match_type": "normalized",
+          "expected": "750 mL",
+          "found": "750 mL",
+          "status": "PASS"
+        },
+        {
+          "field": "government_warning",
+          "match_type": "exact",
+          "expected": "GOVERNMENT WARNING: (1) ACCORDING TO THE SURGEON GENERAL, WOMEN SHOULD NOT DRINK ALCOHOLIC BEVERAGES DURING PREGNANCY BECAUSE OF THE RISK OF BIRTH DEFECTS. (2) CONSUMPTION OF ALCOHOLIC BEVERAGES IMPAIRS YOUR ABILITY TO DRIVE A CAR OR OPERATE MACHINERY, AND MAY CAUSE HEALTH PROBLEMS.",
+          "found": "GOVERNMENT WARNING: (1) ACCORDING TO THE SURGEON GENERAL, WOMEN SHOULD NOT DRINK ALCOHOLIC BEVERAGES DURING PREGNANCY BECAUSE OF THE RISK OF BIRTH DEFECTS. (2) CONSUMPTION OF ALCOHOLIC BEVERAGES IMPAIRS YOUR ABILITY TO DRIVE A CAR OR OPERATE MACHINERY, AND MAY CAUSE HEALTH PROBLEMS.",
+          "status": "PASS"
         }
       ],
-      "latency_ms": 1600,
-      "error": null
+      "error": null,
+      "error_code": null
     }
   ]
 }
 ```
 
-Example 4xx error response from `POST /verify` when the uploaded file type is not supported:
+Invalid-MIME request and expected 415 response:
+
+```bash
+printf 'not an image\n' > not-an-image.txt
+curl -i -X POST "https://ttb-label-verification-ozud.onrender.com/verify" \
+  -F "image=@not-an-image.txt;type=text/plain" \
+  -F "brand_name=Acme Reserve" \
+  -F "class_type=Red Wine" \
+  -F "producer=Acme Winery, LLC" \
+  -F "country_of_origin=United States" \
+  -F "abv=13.5%" \
+  -F "net_contents=750 mL" \
+  -F "government_warning=GOVERNMENT WARNING: (1) ACCORDING TO THE SURGEON GENERAL, WOMEN SHOULD NOT DRINK ALCOHOLIC BEVERAGES DURING PREGNANCY BECAUSE OF THE RISK OF BIRTH DEFECTS. (2) CONSUMPTION OF ALCOHOLIC BEVERAGES IMPAIRS YOUR ABILITY TO DRIVE A CAR OR OPERATE MACHINERY, AND MAY CAUSE HEALTH PROBLEMS."
+```
 
 ```json
 {
   "error": {
     "message": "Please upload an image file.",
+    "code": null,
     "details": []
   }
 }
@@ -296,7 +439,7 @@ Record results after each production deployment. The table remains pending until
 
 | URL | Run count | p50 | p95 | Date |
 | --- | ---: | ---: | ---: | --- |
-| `https://ttb-label-verification-ozud.onrender.com` | 20 | Pending | Pending | Pending deployment repair |
+| `https://ttb-label-verification-ozud.onrender.com` | 20 | Pending | Pending | Pending post-deployment measurement |
 
 ## Limitations
 
@@ -331,6 +474,31 @@ Run the deployed smoke checklist:
 ```powershell
 uv run python scripts/run_live_checklist.py https://ttb-label-verification-ozud.onrender.com
 ```
+
+The checklist generates its own sample label image and filled application data, so no fixture file is required. It prints a longer JSON array containing runtime details and measured latencies. A successful run exits with status `0`, every emitted object has `"passed": true`, and the output includes at least these stable check summaries:
+
+```json
+[
+  {
+    "name": "health",
+    "passed": true
+  },
+  {
+    "name": "valid label",
+    "passed": true
+  },
+  {
+    "name": "batch summary",
+    "passed": true
+  },
+  {
+    "name": "single-label speed",
+    "passed": true
+  }
+]
+```
+
+The JSON above documents the stable acceptance fields only; it is not a recorded latency result. The full checklist also reports mismatch, normalization, warning, imperfect-image, invalid-file, and empty-submit checks.
 
 Fallback:
 
